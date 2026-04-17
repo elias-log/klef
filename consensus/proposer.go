@@ -18,6 +18,7 @@ package consensus
 
 import (
 	"arachnet-bft/core"
+	"arachnet-bft/network"
 	"arachnet-bft/types"
 	"sync"
 	"time"
@@ -27,7 +28,7 @@ type Proposer struct {
 	mu            sync.Mutex
 	Validator     *core.Validator
 	QuorumManager QuorumPolicy
-	Broadcaster   Broadcaster
+	Broadcaster   network.Broadcaster
 }
 
 // Propose: $2f+1$ 부모를 확인하고 새 Vertex를 만들어 세상에 알리네!
@@ -35,27 +36,29 @@ func (p *Proposer) Propose() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// 1. DAG에서 잠재적 부모 수집
+	// 1. DAG에서 부모 수집
 	parents := p.Validator.DAG.GetVerticesByRound(p.Validator.Round)
 
-	// 2. "그 부모들이 정당하다는 투표(Votes)"를 가져와서 QC를 만드세.
+	// 2. 투표 수집 및 정족수 확인: 그 부모들이 정당하다는 투표(Votes)를 가져와서 QC를 만드세.
 	votes := p.Validator.DAG.GetVotesForVertices(parents)
-
-	if !p.QuorumManager.IsQuorum(votes) {
-		return // 증거 부족!
+	if len(votes) == 0 {
+		return
 	}
 
-	// 3. QC 조립 (Vertex.ParentQC에 들어갈 녀석일세)
+	// 3. QC, Vertex 조립
+	// assembleQC 내부에서 types.Vote로 캐스팅하여 VertexHash와 Signature를 추출하네.
 	qc := p.assembleQC(votes)
+	if !p.QuorumManager.IsQuorum(qc) {
+		return // 아직 정족수(2f+1 등)를 채우지 못했구먼.
+	}
 
-	// 4. 제안할 Vertex를 만드세 (Mempool에서 데이터를 가져오는 과정은 가칭일세)
 	vtx := &types.Vertex{
 		Author:    p.Validator.ID,
 		Round:     p.Validator.Round + 1,
-		Parents:   p.extractHashes(parents),
+		Parents:   p.extractHashesFromVertices(parents),
 		ParentQC:  qc,
 		Timestamp: time.Now().UnixMilli(),
-		Payload:   p.fetchTransactions(), // 트랜잭션 수확!
+		Payload:   p.fetchTransactions(),
 	}
 
 	// 서명은 Validator의 권한을 빌려 수행하세.
@@ -75,7 +78,7 @@ func (p *Proposer) fetchTransactions() [][]byte {
 	return [][]byte{}
 }
 
-// extractSignerIDs: 투표 묶음에서 서명자 ID들만 쏙쏙 뽑아내네.
+// extractSignerIDs: 투표 묶음에서 서명자 ID들만 뽑아내네.
 func (p *Proposer) extractSignerIDs(votes []*types.Message) []int {
 	ids := make([]int, 0, len(votes))
 	for _, msg := range votes {
@@ -84,22 +87,23 @@ func (p *Proposer) extractSignerIDs(votes []*types.Message) []int {
 	return ids
 }
 
-// assembleQC: 흩어진 서명들을 모아 하나의 보증서(QC)로 봉인하네.
+// assembleQC: Message -> Vote -> QC
 func (p *Proposer) assembleQC(votes []*types.Message) *types.QC {
 	signatures := make(map[int][]byte)
 	var targetHash string
 	var round int
 
 	for _, msg := range votes {
-		// Vote 페이로드에서 실제 서명을 꺼내야 하네. (Payload 타입 캐스팅 필요)
-		// 지금은 개념만 잡자고!
-		signatures[msg.FromID] = msg.Signature
-		targetHash = msg.TargetHash // 투표 대상 Vertex 해시
-		round = msg.CurrentRound
+		// [핵심] Payload에서 Vote 정보를 안전하게 꺼내는 과정일세.
+		if vote, ok := msg.Payload.(types.Vote); ok {
+			signatures[msg.FromID] = vote.Signature
+			targetHash = vote.VertexHash
+			round = vote.Round
+		}
 	}
 
 	return &types.QC{
-		Type:       types.QCGlobal, // 일단 글로벌로 가세!
+		Type:       types.QCGlobal, //일단 글로벌로 가세
 		VertexHash: targetHash,
 		Round:      round,
 		ProposerID: p.Validator.ID,
@@ -107,16 +111,11 @@ func (p *Proposer) assembleQC(votes []*types.Message) *types.QC {
 	}
 }
 
-// extractHashes: 투표 대상이었던 Vertex들의 해시를 부모 목록으로 만드네.
-func (p *Proposer) extractHashes(votes []*types.Message) []string {
-	set := make(map[string]struct{})
-	for _, v := range votes {
-		set[v.TargetHash] = struct{}{}
-	}
-
-	hashes := make([]string, 0, len(set))
-	for h := range set {
-		hashes = append(hashes, h)
+// extractHashesFromVertices: 부모 Vertex 객체들로부터 해시 목록만 뽑아내네.
+func (p *Proposer) extractHashesFromVertices(vtxs []*types.Vertex) []string {
+	hashes := make([]string, len(vtxs))
+	for i, v := range vtxs {
+		hashes[i] = v.Hash
 	}
 	return hashes
 }

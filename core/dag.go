@@ -161,3 +161,26 @@ func (d *DAG) insert(initialVtx *types.Vertex) {
 		}
 	}
 }
+
+// GetVerticesByRound: 특정 라운드에 생성된 모든 Vertex를 가져오네.
+func (d *DAG) GetVerticesByRound(round int) []*types.Vertex {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	hashes := d.RoundIndex[round]
+	results := make([]*types.Vertex, 0, len(hashes))
+	for _, h := range hashes {
+		if vtx, exists := d.Vertices[h]; exists {
+			results = append(results, vtx)
+		}
+	}
+	return results
+}
+
+// GetVotesForVertices: 특정 Vertex들에 대해 수집된 투표(MsgVote)들을 가져오네.
+// TODO: 향후 Vote 전용 인덱스나 저장소가 필요할 걸세.
+func (d *DAG) GetVotesForVertices(vertices []*types.Vertex) []*types.Message {
+	// 지금은 스켈레톤이니 빈 값을 주지만,
+	// 나중에 d.VoteIndex[vtx.Hash] 같은 곳에서 꺼내오게 될 걸세.
+	return []*types.Message{}
+}
