@@ -34,6 +34,7 @@ type Config struct {
 	CommitteeQuorumNumerator   int // 3
 	CommitteeQuorumDenominator int // 4
 
+	ValidatorChannelSize int
 }
 
 // DefaultConfig
@@ -56,5 +57,6 @@ func DefaultConfig() *Config {
 		GlobalQuorumDenominator:    3,
 		CommitteeQuorumNumerator:   3,
 		CommitteeQuorumDenominator: 4,
+		ValidatorChannelSize:       1024,
 	}
 }
