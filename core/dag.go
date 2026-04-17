@@ -55,6 +55,7 @@ package core
 import (
 	"arachnet-bft/config"
 	"arachnet-bft/types"
+	"fmt"
 	"sync"
 )
 
@@ -93,6 +94,9 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 	// 2. 부모가 하나라도 없다면 대기실(Buffer)행
 	if len(missing) > 0 {
+		//Log
+		fmt.Printf("[DEBUG] DAG: Vertex %s 는 고아일세. 누락된 부모: %v\n", vtx.Hash[:8], missing)
+
 		d.Buffer.AddOrphan(vtx, missing)
 
 		// 라운드 차이가 크면 Fetch 요청
@@ -106,6 +110,7 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 	// TODO: validateVertex(vtx)
 
 	// 3. 부모가 다 있다면 정식 삽입!
+	fmt.Printf("[DEBUG] DAG: Vertex %s 정식 삽입 성공!\n", vtx.Hash[:8])
 	d.insert(vtx)
 }
 

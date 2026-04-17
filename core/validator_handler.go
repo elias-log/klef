@@ -48,6 +48,9 @@ func (v *Validator) handleFetchRequest(msg *types.Message) {
 
 func (v *Validator) handleFetchResponse(msg *types.Message) {
 
+	// Log
+	fmt.Printf("[DEBUG] Validator %d: handleFetchResponse 시작됨! (Vertex 수: %d)\n", v.ID, len(msg.Payload.(types.FetchResponse).Vertices))
+
 	// 1. 관문 통과
 	if err := v.preValidate(msg); err != nil {
 		fmt.Printf("[WARN] Validator %d: FetchResponse validation failed: %v\n", v.ID, err)
@@ -62,6 +65,9 @@ func (v *Validator) handleFetchResponse(msg *types.Message) {
 
 	// 3. 받은 Vertex들을 처리하네.
 	for _, vtx := range res.Vertices {
+		// Log
+		fmt.Printf("[DEBUG] 핸들러 유입 Vertex - Payload 명시 해시: %s, 실제 객체 내부 해시: %s\n", vtx.Hash, vtx.CalculateHash())
+
 		// 1. [체크] 이미 DAG에 있다면, Fetcher에게 또 보낼 필요도 없네.
 		if v.DAG.GetVertex(vtx.Hash) != nil {
 			continue
