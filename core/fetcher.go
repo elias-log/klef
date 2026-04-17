@@ -46,16 +46,16 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 	go func() {
 		// Step 1: 유포자(Suspect)에게 먼저 확인 (Direct Check)
 		f.dispatchFetch([]int{suspectID}, missingHashes)
-		time.Sleep(f.Validator.Config.SyncStep1Timeout)
+		time.Sleep(f.Validator.Config.Sync.Step1Timeout)
 
 		// Step 2: Neighbor Fan-out
 		// GetMissingHashes로 필터링해서, 이미 도착한 건 제외하세!
 		stillMissing := f.Validator.DAG.GetMissingHashes(missingHashes)
 		if len(stillMissing) > 0 {
 			// 이미 물어본 suspectID는 제외하고 무작위 피어 선정
-			neighbors := f.getFilteredNeighbors(f.Validator.Config.MaxRandomPeers, suspectID)
+			neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
 			f.dispatchFetch(neighbors, stillMissing)
-			time.Sleep(f.Validator.Config.SyncStep2Timeout)
+			time.Sleep(f.Validator.Config.Sync.Step2Timeout)
 		} else {
 			return // 다 왔으면 일찍 퇴근하세!
 		}
@@ -64,7 +64,7 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 		stillMissing = f.Validator.DAG.GetMissingHashes(stillMissing)
 		if len(stillMissing) > 0 {
 			f.Validator.Broadcast(f.makeFetchReq(stillMissing))
-			time.Sleep(f.Validator.Config.SyncStep3Timeout)
+			time.Sleep(f.Validator.Config.Sync.Step3Timeout)
 		} else {
 			return
 		}

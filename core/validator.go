@@ -1,64 +1,45 @@
 //메시지 라우팅 (Voter, Dag, Fetcher로 전달)
 
-// TODO:
+/*
+   <Validator Invariants>
+
+   [Integrity] Trusted Initialization:
+       Validator의 모든 하위 구성 요소(DAG, Fetcher, Slasher 등)는
+       Config에 정의된 동일한 보안 정책과 리소스 한도를 공유해야 하네.
+
+   [Safety] Double-Validation Defense:
+       모든 인바운드 메시지는 로직 내부로 침투하기 전,
+       반드시 preValidate(Strategy Pattern) 관문을 통과하여 데이터 무결성이 입증되어야 하네.
+
+   [Consistency] Pending Request Singularity:
+       임의의 Hash에 대해 '유효한(Active) 요청'은 시스템 내에 오직 하나만 존재해야 하며,
+       ExpiryTime을 기준으로 맵(진실)과 큐(인덱스)의 정합성이 상시 유지되어야 하네.
+
+   [Liveness] Recursive Freedom:
+       Fetcher와 DAG 간의 상호작용(AddVertex -> StartSync)은
+       어떠한 상황에서도 무한재귀나 데드락에 빠지지 않도록 비동기/이벤트 기반으로 격리되어야 하네.
+
+   [Resource] Channel Backpressure:
+       InboundMsg 채널은 Config에 설정된 버퍼 크기를 엄수하며,
+       처리 속도가 유입 속도를 따라가지 못할 경우 시스템 전체의 안전을 위해
+       정의된 정책(Drop or Block)에 따라 일관되게 행동해야 하네.
+*/
+
+// TODO: [Retry Policy & System Invariant]
 //
-// [1] 시간 기준 통일 (가장 중요)
-// - IsRequestPending / cleanup / retry 모두 같은 기준을 써야 함
-// - 현재는 RequestTime 기준 vs ExpiryTime 기준이 섞여 있음 → 버그 위험
-// - 해결:
-//   → PendingMeta에 ExpiryTime 추가하고
-//   → 모든 판단을 ExpiryTime 기준으로 통일
+// 1. 재시도 메커니즘 (Next Step):
+//    - 현재 startPendingCleanup은 만료된 항목을 '제거'만 수행함.
+//    - 의도: 제거 시점에 해당 Hash를 Fetcher나 별도의 RetryBuffer에 넘겨
+//      네트워크에 재요청(Re-dispatch)을 보내는 로직이 연계되어야 함.
 //
-//   type PendingMeta struct {
-//       RequestTime time.Time
-//       RetryCount  int
-//       ExpiryTime  time.Time
-//   }
+// 2. 시스템 불변성(Invariant) 보장:
+//    - 하나의 Hash에 대해 "현재 유효한(Active) 요청은 반드시 최대 1개"여야 함.
+//    - 모든 상태 판단은 ExpiryTime을 절대적 기준으로 삼음 (RequestTime은 기록용).
+//    - 큐(PriorityQueue)와 맵(Map)의 데이터 정합성이 깨질 경우, 항상 맵(진실)을 기준으로 큐를 정리함.
 //
-//   IsRequestPending:
-//       return time.Now().Before(meta.ExpiryTime)
-//
-//
-// [2] backoff overflow 방지
-// - backoff = timeout * (1 << retryCount)
-// - retryCount 커지면 duration overflow 가능
-// - 해결:
-//   → maxBackoff 제한 추가
-//
-//   maxBackoff := v.Config.RequestTimeout * 64
-//   if backoff > maxBackoff {
-//       backoff = maxBackoff
-//   }
-//
-//
-// [3] heap/map 일관성 유지
-// - map = 진실, heap = 인덱스
-// - 항상 RequestTime 기준으로 stale 검증
-//
-//   if !exists || !meta.RequestTime.Equal(item.RequestTime) {
-//       heap.Pop(...)
-//       continue
-//   }
-//
-//
-// [4] pendingRequests 단일 진입점 유지
-// - AddPendingRequest 외에서 map 직접 수정 금지
-// - 구조 깨지는 주요 원인임
-//
-//
-// [5] retry 정책 확인
-// - 현재: timeout 지나면 재요청 + exponential backoff + jitter
-// - 의도:
-//   → 네트워크 지연 / 실패 상황에서도 안정적으로 재시도
-//   → 중복 요청은 허용 (idempotent 처리 전제)
-//
-//
-// [6] 시스템 invariant (절대 깨지면 안 되는 규칙)
-// - 하나의 hash에 대해 “현재 유효한 요청은 최대 1개”
-// - ExpiryTime 기준으로만 상태 판단
-// - stale heap item은 반드시 제거됨
-//
-//
+// 3. 멱등성(Idempotency):
+//    - 네트워크 지연으로 인한 중복 응답은 DAG.AddVertex의 존재 확인 로직에서
+//      자연스럽게 필터링되도록 설계됨 (At-least-once delivery 수용).
 
 package core
 
@@ -119,7 +100,7 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 		PeerRounds:        make(map[int]int),
 		pendingRequests:   make(map[string]PendingMeta),
 		messageValidators: make(map[types.MessageType]validation.MessageValidator),
-		InboundMsg:        make(chan *types.Message, cfg.ValidatorChannelSize),
+		InboundMsg:        make(chan *types.Message, cfg.Resource.ValidatorChannelSize),
 	}
 
 	// 2. 하위 엔진(Components) 생성 및 의존성 주입 (Dependency Injection)
@@ -127,12 +108,12 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 
 	// Fetcher 생성 (Validator 참조 주입)
 	v.Fetcher = &VertexFetcher{
-		InboundResponse: make(chan *types.Vertex, cfg.FetcherChannelSize),
+		InboundResponse: make(chan *types.Vertex, cfg.Resource.FetcherChannelSize),
 		Validator:       v,
 	}
 
 	// DAG 생성 (Fetcher를 인터페이스로 주입)
-	v.DAG = NewDAG(v.Fetcher, cfg.OrphanCapacity, cfg)
+	v.DAG = NewDAG(v.Fetcher, cfg)
 
 	// 3. 메시지 검증 전략(Strategy) 등록
 	v.registerValidators()
@@ -142,10 +123,10 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 
 func (v *Validator) registerValidators() {
 	v.messageValidators[types.MsgFetchReq] = &validation.FetchRequestValidator{
-		MaxRequestHashes: v.Config.MaxFetchRequestHashes,
+		MaxRequestHashes: v.Config.Request.MaxFetchRequestHashes,
 	}
 	v.messageValidators[types.MsgFetchRes] = &validation.FetchResponseValidator{
-		MaxVertexCount: v.Config.MaxFetchResponseVtx,
+		MaxVertexCount: v.Config.Request.MaxFetchResponseVtx,
 	}
 }
 
@@ -159,6 +140,7 @@ type PendingItem struct {
 
 type PendingMeta struct {
 	RequestTime time.Time
+	ExpiryTime  time.Time
 	RetryCount  int
 }
 
@@ -255,15 +237,14 @@ func (v *Validator) IsRequestPending(hash string) bool {
 	}
 
 	// 만료 여부만 판단해서 알려주게나.
-	// 여기서 지우려고 애쓰지 않아도 되네. (Read Lock 상태에선 지울 수도 없고 말이세!)
 	// 별도의 고루틴 startPendingCleanup()으로 처리해서 리드만 해도 되게 처리하겠네.
-	return time.Since(meta.RequestTime) <= v.Config.RequestTimeout
+	return time.Now().Before(meta.ExpiryTime)
 }
 
 // Validator 시작 시 한 번 띄워두는 녀석일세.
 func (v *Validator) startPendingCleanup() {
 	// 1. Ticker Leak 방지: 안해두면 죽은 애가 RequestTimeout의 최대 2배까지 살아남네.
-	checkInterval := v.Config.RequestTimeout / 2
+	checkInterval := v.Config.Request.BaseTimeout / 2
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
@@ -311,14 +292,10 @@ func (v *Validator) AddPendingRequest(hash string) {
 	defer v.pendingMu.Unlock()
 
 	now := time.Now()
-
-	// 1. 기존 메타 정보 확인
 	meta, exists := v.pendingRequests[hash]
 
-	// 2. [중복 체크] 아직 대기 시간이 남았다면 중복 요청을 막으세.
-	// (여기서의 '타임아웃'은 백오프가 적용된 이전의 expiry 기준일 수도 있지만,
-	// 간단하게 RequestTime 기준으로만 체크해도 힙 폭발은 막을 수 있네.)
-	if exists && time.Since(meta.RequestTime) < v.Config.RequestTimeout {
+	// 2. [중복 체크] 이미 유효한 요청이 진행 중이면 무시
+	if exists && now.Before(meta.ExpiryTime) {
 		return
 	}
 
@@ -326,36 +303,35 @@ func (v *Validator) AddPendingRequest(hash string) {
 	retryCount := 0
 	if exists {
 		retryCount = meta.RetryCount + 1
-		if retryCount > 6 {
-			retryCount = 6
-		}
 	}
 
 	// 4. 지수 백오프 및 지터 계산
-	// 1<<retryCount는 1, 2, 4, 8, 16, 32, 64로 늘어나네.
-	backoff := v.Config.RequestTimeout * time.Duration(1<<retryCount)
+	// backoff overflow 방지 / MaxBackoff 적용
+	backoff := v.Config.Request.BaseTimeout * time.Duration(1<<retryCount)
+	if backoff > v.Config.Request.MaxBackoff {
+		backoff = v.Config.Request.MaxBackoff
+	}
 
-	// 지터(Jitter) 계산: 0 ~ backoff/5 사이의 무작위 값
-	var jitter time.Duration
+	// Jitter 계산: 0 ~ backoff/5 사이의 무작위 값
+	jitter := time.Duration(0)
 	if backoff > 0 {
 		jitter = time.Duration(rand.Int63n(int64(backoff / 5)))
 	}
 
 	expiry := now.Add(backoff + jitter)
 
-	// 5. 맵(진실) 갱신 - 이제 PendingMeta 타입을 넣으세!
+	// 5. map(진실) 갱신 & Queue() 삽입
 	v.pendingRequests[hash] = PendingMeta{
 		RequestTime: now,
+		ExpiryTime:  expiry,
 		RetryCount:  retryCount,
 	}
 
-	// 6. 큐(참고용)에 삽입
-	item := &PendingItem{
+	heap.Push(&v.pendingQueue, &PendingItem{
 		Hash:        hash,
 		RequestTime: now,
 		ExpiryTime:  expiry,
-	}
-	heap.Push(&v.pendingQueue, item)
+	})
 }
 
 // 공통 검증 진입점: handle 함수들이 호출하기 전에 거쳐가는 관문이라네.

@@ -36,7 +36,7 @@ func (s *Slasher) HandleEquivocation(vtx1, vtx2 *types.Vertex) *types.Evidence {
 	fmt.Printf("[SLASHER] Validator %d 의 이중 투표 적발! (Round: %d)\n", vtx1.Author, vtx1.Round)
 
 	// 벌점 부과
-	s.penaltyTable[vtx1.Author] += s.Config.EquivocationPenalty
+	s.penaltyTable[vtx1.Author] += s.Config.Security.EquivocationPenalty
 
 	// 고발장
 	evidence := types.Evidence{
@@ -69,7 +69,7 @@ func (s *Slasher) ProcessExternalEvidence(ev *types.Evidence) {
 
 	// 3. 판결 확정 및 벌점 집행
 	fmt.Printf("[SLASHER] 타 노드의 신고 접수: Validator %d 처벌 (죄목: %s)\n", ev.TargetID, ev.Type)
-	s.penaltyTable[ev.TargetID] += s.Config.EquivocationPenalty
+	s.penaltyTable[ev.TargetID] += s.Config.Security.EquivocationPenalty
 	s.evidences[ev.TargetID] = append(s.evidences[ev.TargetID], *ev)
 }
 
@@ -79,5 +79,5 @@ func (s *Slasher) IsSlashed(validatorID int) bool {
 	defer s.mu.RUnlock()
 
 	// 벌점이 임계치를 넘으면 이 노드의 말은 아무도 안 믿게 될 걸세.
-	return s.penaltyTable[validatorID] >= s.Config.SlashThreshold
+	return s.penaltyTable[validatorID] >= s.Config.Security.SlashThreshold
 }

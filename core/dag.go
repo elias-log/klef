@@ -72,11 +72,11 @@ type DAG struct {
 }
 
 // NewDAG: DAG와 버퍼를 초기화해서 반환하네.
-func NewDAG(fetcher SyncFetcher, orphanCapacity int, cfg *config.Config) *DAG {
+func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
 	return &DAG{
 		Vertices:   make(map[string]*types.Vertex),
 		RoundIndex: make(map[int][]string),
-		Buffer:     NewOrphanBuffer(orphanCapacity),
+		Buffer:     NewOrphanBuffer(cfg.DAG.OrphanCapacity),
 		Fetcher:    fetcher,
 		Config:     cfg,
 	}
@@ -97,11 +97,13 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 		// 라운드 차이가 크면 Fetch 요청
 		roundLag := currentNodeRound - vtx.Round
-		if roundLag > d.Config.SyncTriggerThreshold {
+		if roundLag > d.Config.DAG.SyncTriggerThreshold {
 			d.Fetcher.StartSync(missing, vtx.Author)
 		}
 		return
 	}
+
+	// TODO: validateVertex(vtx)
 
 	// 3. 부모가 다 있다면 정식 삽입!
 	d.insert(vtx)
