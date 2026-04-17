@@ -1,4 +1,24 @@
-//누락된 Vertex를 이웃 노드에게 요청하여 DAG의 구멍을 메움.
+// 누락된 Vertex를 이웃 노드에게 요청하여 DAG의 구멍을 메움.
+// TODO: [Fetcher Evolution & Integration]
+//
+// 1. 이벤트 기반 단계 전환 (Liveness):
+//    - 현재 Step 1~3은 time.Sleep 기반의 정적 타이밍에 의존함.
+//    - 의도: 데이터가 도착하는 즉시 다음 단계를 취소하거나 진행하는
+//      Event-driven 방식으로 전환하여 불필요한 지연(Latency)을 제거해야 함.
+//
+// 2. Pending 시스템과의 완벽한 결합 (Control):
+//    - 현재 Fetcher가 스스로 재시도를 제어하고 있음.
+//    - 의도: 향후 Validator의 'startPendingCleanup' 루프가 재시도 타이밍을 결정하고,
+//      Fetcher는 단순 '요청 발송기' 역할만 수행하도록 로직을 이관해야 함.
+//
+// 3. Batch 요청의 세분화 관리 (Efficiency):
+//    - 현재 요청은 []hash(Batch) 단위이나, Pending 관리는 개별 Hash 단위임.
+//    - 의도: 일부 데이터만 누락된 경우, 전체 배치를 다시 요청하지 않고
+//      정말 없는 녀석만 골라내는 'stillMissing' 필터링을 매 단계마다 더 정교하게 수행할 것.
+//
+// 4. Peer 평판 시스템 연계 (Safety):
+//    - handlePanic 시점에 단순히 출력만 하는 것이 아니라,
+//      데이터를 주지 않는 노드(Suspect)에 대한 패널티 부여 로직을 연계해야 함.
 
 package core
 
@@ -43,22 +63,36 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 	// 1. 요청 관리 상태 (이건 구조체 멤버로 두는 게 좋네)
 	// type RequestState struct { attempts int, askedPeers map[int]bool }
 
+	// Hash 단위 필터링으로 고루틴 폭발 방어
+	filtered := make([]string, 0)
+	for _, h := range missingHashes {
+		// 이미 요청 중인 해시는 중복 요청하지 않네!
+		if !f.Validator.IsRequestPending(h) {
+			f.Validator.AddPendingRequest(h)
+			filtered = append(filtered, h)
+		}
+	}
+
+	// 보낼 게 없으면 즉시 퇴근!
+	if len(filtered) == 0 {
+		return
+	}
+
 	go func() {
 		// Step 1: 유포자(Suspect)에게 먼저 확인 (Direct Check)
-		f.dispatchFetch([]int{suspectID}, missingHashes)
+		f.dispatchFetch([]int{suspectID}, filtered)
 		time.Sleep(f.Validator.Config.Sync.Step1Timeout)
 
 		// Step 2: Neighbor Fan-out
 		// GetMissingHashes로 필터링해서, 이미 도착한 건 제외하세!
-		stillMissing := f.Validator.DAG.GetMissingHashes(missingHashes)
-		if len(stillMissing) > 0 {
-			// 이미 물어본 suspectID는 제외하고 무작위 피어 선정
-			neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
-			f.dispatchFetch(neighbors, stillMissing)
-			time.Sleep(f.Validator.Config.Sync.Step2Timeout)
-		} else {
-			return // 다 왔으면 일찍 퇴근하세!
+		stillMissing := f.Validator.DAG.GetMissingHashes(filtered)
+		if len(stillMissing) == 0 {
+			return
 		}
+		// 이미 물어본 suspectID는 제외하고 무작위 피어 선정
+		neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
+		f.dispatchFetch(neighbors, stillMissing)
+		time.Sleep(f.Validator.Config.Sync.Step2Timeout)
 
 		// Step 3: Network-wide Broadcast
 		stillMissing = f.Validator.DAG.GetMissingHashes(stillMissing)
