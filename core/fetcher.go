@@ -79,37 +79,77 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 	}
 
 	go func() {
-		// Step 1: 유포자(Suspect)에게 먼저 확인 (Direct Check)
-		f.dispatchFetch([]int{suspectID}, filtered)
-		time.Sleep(f.Validator.Config.Sync.Step1Timeout)
+		currentMissing := filtered
 
+		// [단계별 시나리오: Step 1 ~ 3]
+		// Step 1: Direct Check (Suspect에게 먼저 확인)
 		// Step 2: Neighbor Fan-out
-		// GetMissingHashes로 필터링해서, 이미 도착한 건 제외하세!
-		stillMissing := f.Validator.DAG.GetMissingHashes(filtered)
-		if len(stillMissing) == 0 {
-			return
-		}
-		// 이미 물어본 suspectID는 제외하고 무작위 피어 선정
-		neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
-		f.dispatchFetch(neighbors, stillMissing)
-		time.Sleep(f.Validator.Config.Sync.Step2Timeout)
-
 		// Step 3: Network-wide Broadcast
-		stillMissing = f.Validator.DAG.GetMissingHashes(stillMissing)
-		if len(stillMissing) > 0 {
-			f.Validator.Broadcast(f.makeFetchReq(stillMissing))
-			time.Sleep(f.Validator.Config.Sync.Step3Timeout)
-		} else {
-			return
+		for step := 1; step <= 3; step++ {
+			// 1. 현재 누락된 게 있는지 최종 확인
+			currentMissing = f.Validator.DAG.GetMissingHashes(currentMissing)
+			if len(currentMissing) == 0 {
+				return // 다 찾았으니 일찍 퇴근하세!
+			}
+
+			// 2. 단계에 맞는 대상에게 요청 발송
+			f.dispatchByStep(step, suspectID, currentMissing)
+
+			// 3. [미래의 핵심] 데이터가 오거나, 타임아웃 될 때까지 대기
+			stepTimeout := f.getStepTimeout(step)
+			timer := time.NewTimer(stepTimeout)
+
+		waitLoop:
+			for {
+				select {
+				case <-f.InboundResponse:
+					// 응답이 하나라도 오면, 다시 누락분을 체크하세.
+					currentMissing = f.Validator.DAG.GetMissingHashes(currentMissing)
+					if len(currentMissing) == 0 {
+						return // 다 왔구먼! 고루틴 종료.
+					}
+					// 아직 다 안 왔으면 계속 기다리거나 다음 단계로 넘어갈 준비를 하네.
+
+				case <-timer.C:
+					// 타임아웃! 다음 단계(Step)로 넘어가서 더 넓게 물어봐야 하네.
+					break waitLoop
+				}
+			}
+			timer.Stop()
 		}
 
-		// Step 4: 그래도 없으면 handlepanic (비상사태)
+		// Step 4: 패닉 처리
 		// 2f+1이 찬성한 데이터가 이때까지 안 오면 문제일세.
-		stillMissing = f.Validator.DAG.GetMissingHashes(stillMissing)
-		if len(stillMissing) > 0 {
-			f.handlePanic(stillMissing)
+		finalMissing := f.Validator.DAG.GetMissingHashes(currentMissing)
+		if len(finalMissing) > 0 {
+			f.handlePanic(finalMissing)
 		}
 	}()
+}
+
+func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []string) {
+	switch step {
+	case 1:
+		f.dispatchFetch([]int{suspectID}, hashes)
+	case 2:
+		neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
+		f.dispatchFetch(neighbors, hashes)
+	case 3:
+		f.Validator.Broadcast(f.makeFetchReq(hashes))
+	}
+}
+
+func (f *VertexFetcher) getStepTimeout(step int) time.Duration {
+	switch step {
+	case 1:
+		return f.Validator.Config.Sync.Step1Timeout
+	case 2:
+		return f.Validator.Config.Sync.Step2Timeout
+	case 3:
+		return f.Validator.Config.Sync.Step3Timeout
+	default:
+		return 5 * time.Second
+	}
 }
 
 // dispatchFetch: 지정된 피어들에게 실제 FETCH_REQ 메시지를 전송하는 '발송' 담당일세.
