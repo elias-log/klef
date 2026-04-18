@@ -1,5 +1,6 @@
 # arachnet-bft
 
+```
 .
 ├── config/             # 시스템 정책 및 파라미터 관리 (Timeout, Threshold 등)
 ├── consensus/          # 합의 엔진: Proposer와 투표 집계(Vote Aggregator) 로직
@@ -12,3 +13,4 @@
 ├── network/            # 전송 계층: Broadcaster 및 직렬화(Codec) 담당
 ├── types/              # 공통 규격: Message, Vertex, Vote 등 핵심 데이터 구조
 └── main.go             # Arachnet-BFT 노드 실행 엔트리 포인트
+```
