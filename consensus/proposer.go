@@ -95,10 +95,10 @@ func (p *Proposer) assembleQC(votes []*types.Message) *types.QC {
 
 	for _, msg := range votes {
 		// [핵심] Payload에서 Vote 정보를 안전하게 꺼내는 과정일세.
-		if vote, ok := msg.Payload.(types.Vote); ok {
-			signatures[msg.FromID] = vote.Signature
-			targetHash = vote.VertexHash
-			round = vote.Round
+		if msg.Vote != nil {
+			signatures[msg.FromID] = msg.Vote.Signature
+			targetHash = msg.Vote.VertexHash
+			round = msg.Vote.Round
 		}
 	}
 

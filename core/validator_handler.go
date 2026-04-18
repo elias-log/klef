@@ -24,7 +24,7 @@ func (v *Validator) handleFetchRequest(msg *types.Message) {
 	}
 
 	// 2. 페이로드에서 요청된 해시 목록을 꺼내네.
-	req := msg.Payload.(types.FetchRequest)
+	req := msg.FetchReq
 	var foundVertices []*types.Vertex
 
 	// 3. 내 DAG를 뒤져서 있는 것만 골라 담게나.
@@ -40,7 +40,7 @@ func (v *Validator) handleFetchRequest(msg *types.Message) {
 			FromID:       v.ID,
 			CurrentRound: v.Round,
 			Type:         types.MsgFetchRes,
-			Payload:      types.FetchResponse{Vertices: foundVertices},
+			FetchRes:     &types.FetchResponse{Vertices: foundVertices},
 		}
 		v.SendTo(msg.FromID, response)
 	}
@@ -48,8 +48,12 @@ func (v *Validator) handleFetchRequest(msg *types.Message) {
 
 func (v *Validator) handleFetchResponse(msg *types.Message) {
 
+	if msg.FetchRes == nil {
+		return
+	}
+
 	// Log
-	fmt.Printf("[DEBUG] Validator %d: handleFetchResponse 시작됨! (Vertex 수: %d)\n", v.ID, len(msg.Payload.(types.FetchResponse).Vertices))
+	fmt.Printf("[DEBUG] Validator %d: handleFetchResponse 시작됨! (Vertex 수: %d)\n", v.ID, len(msg.FetchRes.Vertices))
 
 	// 1. 관문 통과
 	if err := v.preValidate(msg); err != nil {
@@ -58,10 +62,7 @@ func (v *Validator) handleFetchResponse(msg *types.Message) {
 	}
 
 	// 2. 페이로드에서 Vertex 뭉치를 꺼내네.
-	res, ok := msg.Payload.(types.FetchResponse)
-	if !ok {
-		return
-	}
+	res := msg.FetchRes
 
 	// 3. 받은 Vertex들을 처리하네.
 	for _, vtx := range res.Vertices {
@@ -73,7 +74,7 @@ func (v *Validator) handleFetchResponse(msg *types.Message) {
 			continue
 		}
 
-		// 2. [저장 우선] 먼저 DAG에 안전하게 모셔두게나.
+		// 2. [저장] 먼저 DAG에 안전하게 모셔두게나.
 		// AddVertex가 성공했을 때만 후속 조치를 취하는 게 안전하네.
 		v.DAG.AddVertex(vtx, v.Round)
 
@@ -109,9 +110,11 @@ func (v *Validator) routeMessage(msg *types.Message) {
 		v.handleFetchResponse(msg)
 	case types.MsgVertex:
 		// Vertex가 직접 들어올 때 처리
-		if vtx, ok := msg.Payload.(*types.Vertex); ok {
-			v.DAG.AddVertex(vtx, v.Round)
+		if msg.Vertex != nil {
+			v.DAG.AddVertex(msg.Vertex, v.Round)
 		}
+	case types.MsgVote:
+		// TODO: v.handleVote(msg)
 	default:
 		fmt.Printf("[DEBUG] Validator %d: Received unhandled message type: %s\n", v.ID, msg.Type)
 	}

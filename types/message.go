@@ -1,31 +1,49 @@
 package types
 
-import "time"
-
-// MessageType을 상수로 정의하면 오타를 줄일 수 있네!
-// TODO: 디버깅 후 "VERTEX"같은 string을 숫자로 변경할 예정이네.
-type MessageType string
+type MessageType uint8
 
 const (
-	MsgVertex   MessageType = "VERTEX"
-	MsgVote     MessageType = "VOTE"
-	MsgFetchReq MessageType = "FETCH_REQ"
-	MsgFetchRes MessageType = "FETCH_RES"
-	MsgEvidence MessageType = "EVIDENCE"
+	MsgVertex MessageType = iota
+	MsgVote
+	MsgFetchReq
+	MsgFetchRes
+	MsgEvidence
 )
 
-// 모든 통신의 기본 봉투라네.
+func (t MessageType) String() string {
+	switch t {
+	case MsgVertex:
+		return "VERTEX"
+	case MsgVote:
+		return "VOTE"
+	case MsgFetchReq:
+		return "FETCH_REQ"
+	case MsgFetchRes:
+		return "FETCH_RES"
+	case MsgEvidence:
+		return "EVIDENCE"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 type Message struct {
 	FromID       int
 	CurrentRound int
 	Type         MessageType // MsgVertex, MsgVote 등
-	Payload      interface{} // 실제 데이터
+	Signature    []byte
+
+	// Payload
+	Vote     *Vote
+	Vertex   *Vertex
+	FetchReq *FetchRequest
+	FetchRes *FetchResponse
+	Evidence *Evidence
 }
 
 // FetchRequest: "나 이 해시들 좀 알려주게!"
 type FetchRequest struct {
 	MissingHashes []string
-	RequestTime   time.Time
 }
 
 // FetchResponse: 요청받은 Vertex들을 담아 보내는 바구니일세.

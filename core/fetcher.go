@@ -52,7 +52,7 @@ func (f *VertexFetcher) makeFetchReq(hashes []string) *types.Message {
 	return &types.Message{
 		FromID: f.Validator.ID,
 		Type:   types.MsgFetchReq, // "FETCH_REQ" 상수를 사용하세.
-		Payload: types.FetchRequest{
+		FetchReq: &types.FetchRequest{
 			MissingHashes: hashes,
 		},
 	}

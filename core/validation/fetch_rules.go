@@ -23,10 +23,11 @@ type FetchRequestValidator struct {
 }
 
 func (f *FetchRequestValidator) Validate(msg *types.Message, ctx ValidatorContext) error {
-	req, ok := msg.Payload.(types.FetchRequest)
-	if !ok {
-		return errors.New("payload is not FetchResponse")
+
+	if msg.FetchReq == nil {
+		return errors.New("message does not contain a FetchRequest")
 	}
+	req := msg.FetchReq
 
 	// 1. 최소 1개 이상의 해시는 요청해야 하네.
 	if len(req.MissingHashes) == 0 {
@@ -47,10 +48,10 @@ type FetchResponseValidator struct {
 }
 
 func (f *FetchResponseValidator) Validate(msg *types.Message, ctx ValidatorContext) error {
-	res, ok := msg.Payload.(types.FetchResponse)
-	if !ok {
-		return errors.New("payload is not FetchResponse")
+	if msg.FetchRes == nil {
+		return errors.New("message does not contain a FetchResponse")
 	}
+	res := msg.FetchRes
 
 	// 1. 응답 데이터 개수 검증 (Dos 방어)
 	if len(res.Vertices) == 0 {

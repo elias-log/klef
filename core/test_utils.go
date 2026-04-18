@@ -31,9 +31,9 @@ func CreateDummyVertex(author int, round int, parents []string, signer *Ed25519S
 // InjectFetchResponse: 특정 검증인에게 가짜 FetchResponse를 주입하네.
 func InjectFetchResponse(v *Validator, vertices []*types.Vertex) {
 	msg := &types.Message{
-		FromID:  999,
-		Type:    types.MsgFetchRes,
-		Payload: types.FetchResponse{Vertices: vertices},
+		FromID:   999,
+		Type:     types.MsgFetchRes,
+		FetchRes: &types.FetchResponse{Vertices: vertices},
 	}
 	v.InboundMsg <- msg
 }
