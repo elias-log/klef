@@ -1,23 +1,36 @@
 /*
-	<Objectives: 2f+1 QC 기반 새 Vertex 생성 및 배포>
-	1. 부모 수집 (2f+1): 부모가 신뢰의 증거(QC).
-	2. 새로운 Vertex 생성: 수집된 부모들의 해시를 Parents 목록에 넣고,
-	   내 Mempool에서 transaction을 담아 Payload에 넣은 후 개인키로 서명하네.
-	3. 배포 (Proposal): 완성된 Vertex를 MsgVertex 봉투에 담아 모든 Peer에게 뿌리네
-	4. QC: 다른 노드들이 이 Vertex를 보고 "음, 부모들도 확실하고 서명도 맞군"이라고 판단하면 MsgVote를 돌려줄 걸세.
-	그 표들이 모여 다시 다음 라운드의 부모(2f+1)가 되는 선순환 구조
+   <Objectives: Quorum-Driven Vertex Lifecycle>
+   1. 투표 기반 부모 확정 (QC Selection):
+      단순히 라운드로 긁어오는 것이 아니라, Validator의 VotePool에서 2f+1 이상의
+      투표가 모인 '검증된 정점들'을 추출하여 이번 라운드의 부모로 삼네.
+   2. 증거(QC) 조립:
+      수집된 투표 서명들을 모아 'ParentQC'를 생성하네. 이 QC는 "내 부모들은 이미
+      네트워크 정족수의 승인을 받았다"는 움직일 수 없는 보증서가 될 걸세.
+   3. 인과 관계가 담긴 Vertex 생성:
+      QC가 가리키는 해시들을 Parents 목록에 넣고, 내 Mempool의 트랜잭션을 담아
+      개인키로 서명하네.
+   4. 배포 및 선순환:
+      완성된 Vertex를 모든 Peer에게 전파(Broadcast)하네. 이 Vertex가 다시 남들에게
+      인정받아 투표를 얻으면, 그것이 다음 라운드의 부모(QC)가 되는 구조일세.
 
-	<Invariants>
-	[Safety] Round Monotonicity: 동일한 Author는 동일한 Round에 오직 하나의 Vertex만 제안해야 하네. (Equivocation 방지)
-	[Validity] Quorum Dependency: 새로 생성된 Vertex의 Parents 집합은 반드시 QuorumPolicy가 승인한 정족수(2f+1) 이상을 포함해야 하네.
-	[Liveness] Parent Connectivity: 제안된 Vertex의 부모들은 반드시 바로 직전 라운드(R−1) 혹은 그 이전의 유효한 노드여야 하며, 끊어진 경로가 있어서는 안 되네.
-	[Integrity] Signature Authenticity: 배포되는 모든 Vertex는 제안자의 유효한 개인키 서명을 포함해야 하네.
+   <Invariants>
+   [Safety] Double-Proposal Guard:
+       동일 Author는 동일 Round에 오직 하나의 Vertex만 제안해야 하네.
+       이미 제안했다면 즉시 중단하여 이중 투표(Equivocation) 슬래싱을 방지하네.
+   [Validity] Evidence-First:
+       새로운 Vertex는 반드시 유효한 ParentQC를 포함해야 하며,
+       이 QC는 QuorumPolicy(2f+1 등)를 완벽히 충족해야 하네.
+   [Liveness] Causal Link:
+       모든 부모는 이전 라운드의 유효한 노드여야 하며, QC를 통해 끊어지지 않는
+       신뢰의 사슬을 증명해야 하네.
+   [Integrity] Absolute Authenticity:
+       배포되는 모든 Vertex는 제안자의 Ed25519 서명을 포함해야 하며,
+       CalculateHash는 모든 필드를 결정론적으로 반영해야 하네.
 */
 
 package consensus
 
 import (
-	"arachnet-bft/core"
 	"arachnet-bft/network"
 	"arachnet-bft/types"
 	"sync"
@@ -26,50 +39,77 @@ import (
 
 type Proposer struct {
 	mu            sync.Mutex
-	Validator     *core.Validator
+	ctx           ProposerContext
 	QuorumManager QuorumPolicy
 	Broadcaster   network.Broadcaster
 }
 
+func NewProposer(ctx ProposerContext, qp QuorumPolicy, broadcaster network.Broadcaster) *Proposer {
+	return &Proposer{
+		ctx:           ctx,
+		QuorumManager: qp,
+		Broadcaster:   broadcaster,
+	}
+}
+
 // Propose: $2f+1$ 부모를 확인하고 새 Vertex를 만들어 세상에 알리네!
 func (p *Proposer) Propose() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
-	// 1. DAG에서 부모 수집
-	parents := p.Validator.DAG.GetVerticesByRound(p.Validator.Round)
-
-	// 2. 투표 수집 및 정족수 확인: 그 부모들이 정당하다는 투표(Votes)를 가져와서 QC를 만드세.
-	votes := p.Validator.DAG.GetVotesForVertices(parents)
-	if len(votes) == 0 {
+	// 1. 투표 수집 (Invariant: Validity)
+	// Validator의 VotePool에서 현재 라운드에 대한 2f+1 투표를 가져오네.
+	// 1. 투표 수집 시, 해당 투표들이 모인 '기준 라운드' 수집
+	quorumVotes, votedRound := p.ctx.GetReadyQuorum()
+	if quorumVotes == nil {
 		return
 	}
 
-	// 3. QC, Vertex 조립
-	// assembleQC 내부에서 types.Vote로 캐스팅하여 VertexHash와 Signature를 추출하네.
-	qc := p.assembleQC(votes)
-	if !p.QuorumManager.IsQuorum(qc) {
-		return // 아직 정족수(2f+1 등)를 채우지 못했구먼.
+	// 2. 중복 제안 방지 (Invariant: Safety)
+	currentRound := p.ctx.GetCurrentRound()
+	nextRound := votedRound + 1
+	if p.ctx.AlreadyProposed(nextRound) {
+		return
 	}
 
+	// 3. 증거(QC)와 부모(Parents) 조립
+	qc := p.assembleQC(quorumVotes, currentRound)
+	parentHashes := p.extractHashesFromVotes(quorumVotes)
+
+	// 4. 새 Vertex 생성
 	vtx := &types.Vertex{
-		Author:    p.Validator.ID,
-		Round:     p.Validator.Round + 1,
-		Parents:   p.extractHashesFromVertices(parents),
-		ParentQC:  qc,
+		Author:    p.ctx.GetID(),
+		Round:     nextRound,
+		Parents:   parentHashes,
+		ParentQCs: []*types.QC{qc},
 		Timestamp: time.Now().UnixMilli(),
 		Payload:   p.fetchTransactions(),
 	}
 
-	// 서명은 Validator의 권한을 빌려 수행하세.
+	// 5. 결정론적 해싱 및 서명
 	vtx.Hash = vtx.CalculateHash()
-	vtx.Signature = p.Validator.Sign(vtx.Hash)
+	vtx.Signature = p.ctx.Sign(vtx.Hash)
 
-	// 4. 네트워크 전파
+	// 6. 전파 및 기록 [cite: 314]
 	p.Broadcaster.Broadcast(types.MsgVertex, vtx)
+	p.ctx.MarkAsProposed(nextRound)
 
 	// 여기서 라운드를 올리지 마세!
 	// "내가 제안한 이 Vertex가 남들에게 인정받아 다시 투표가 모일 때" 그때 올라가는 걸세.
+}
+
+// extractHashesFromVotes: 투표 묶음에서 중복을 제거한 부모 해시 목록을 추출하네.
+func (p *Proposer) extractHashesFromVotes(votes []*types.Message) []string {
+	hashSet := make(map[string]struct{})
+	for _, msg := range votes {
+		if msg.Vote != nil {
+			hashSet[msg.Vote.VertexHash] = struct{}{}
+		}
+	}
+
+	hashes := make([]string, 0, len(hashSet))
+	for h := range hashSet {
+		hashes = append(hashes, h)
+	}
+	return hashes
 }
 
 // fetchTransactions: Mempool에서 가져올 로직의 자리일세.
@@ -87,35 +127,42 @@ func (p *Proposer) extractSignerIDs(votes []*types.Message) []int {
 	return ids
 }
 
-// assembleQC: Message -> Vote -> QC
-func (p *Proposer) assembleQC(votes []*types.Message) *types.QC {
+// assembleQC: 수집된 투표들로부터 정족수 증명(QC)을 조립하네.
+func (p *Proposer) assembleQC(votes []*types.Message, round int) *types.QC {
 	signatures := make(map[int][]byte)
-	var targetHash string
-	var round int
+	var representativeHash string
 
 	for _, msg := range votes {
-		// [핵심] Payload에서 Vote 정보를 안전하게 꺼내는 과정일세.
 		if msg.Vote != nil {
 			signatures[msg.FromID] = msg.Vote.Signature
-			targetHash = msg.Vote.VertexHash
-			round = msg.Vote.Round
+			// 현재는 루프의 마지막 해시를 대표값으로 쓰지만, 이는 과도기적 구현일세.
+			representativeHash = msg.Vote.VertexHash
 		}
 	}
 
+	/* #TODO: [Scalability & Integrity Upgrade Path]
+
+	   1. 다중 부모 해시 처리 (Multi-Hash Consensus):
+	      - 현재는 하나의 representativeHash만 담고 있지만, DAG 기반에서는 2f+1개의 투표가
+	        서로 다른 부모 해시를 가리킬 수 있네.
+	      - 미래에는 이 해시들의 집합(Set)이나 머클 루트(Merkle Root)를 QC에 담아
+	        모든 부모의 정당성을 동시에 증명해야 하네.
+
+	   2. BLS Threshold Signature 도입:
+	      - 현재의 map[int][]byte 구조는 노드 수가 늘어날수록 QC의 크기가 선형적으로 증가하네.
+	      - 여기에 BLS 서명 결합(Aggregation)을 도입하여, 수백 개의 서명을 단 하나의
+	        고정 크기 서명으로 압축해야 하네. (Network BW 절감의 핵심!)
+
+	   3. 비트마스크(Bitmask) 최적화:
+	      - 누가 서명했는지 map으로 기록하는 대신, 비트마스크를 사용하여 QC 헤더 크기를
+	        획기적으로 줄이는 작업이 병행되어야 하네.
+	*/
+
 	return &types.QC{
-		Type:       types.QCGlobal, //일단 글로벌로 가세
-		VertexHash: targetHash,
+		Type:       types.QCGlobal,
+		VertexHash: representativeHash,
 		Round:      round,
-		ProposerID: p.Validator.ID,
+		ProposerID: p.ctx.GetID(),
 		Signatures: signatures,
 	}
-}
-
-// extractHashesFromVertices: 부모 Vertex 객체들로부터 해시 목록만 뽑아내네.
-func (p *Proposer) extractHashesFromVertices(vtxs []*types.Vertex) []string {
-	hashes := make([]string, len(vtxs))
-	for i, v := range vtxs {
-		hashes[i] = v.Hash
-	}
-	return hashes
 }

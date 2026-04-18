@@ -1,7 +1,6 @@
 package consensus
 
 import (
-	"arachnet-bft/config"
 	"arachnet-bft/types"
 	"math"
 	"sync"
@@ -27,17 +26,19 @@ type DynamicQuorumPolicy struct {
 	oldCommitteeN   int
 	newCommitteeN   int
 	isTransitioning bool // 지금 멤버십이 변하는 중인가?
-	Config          *config.Config
+	globalRatio     float64
+	committeeRatio  float64
 }
 
-func NewDynamicQuorumPolicy(totalN int, committeeN int, cfg *config.Config) *DynamicQuorumPolicy {
+func NewDynamicQuorumPolicy(totalN int, committeeN int, gRatio, cRatio float64) *DynamicQuorumPolicy {
 	return &DynamicQuorumPolicy{
 		oldTotalN:       totalN,
 		newTotalN:       totalN,
 		oldCommitteeN:   committeeN,
 		newCommitteeN:   committeeN,
 		isTransitioning: false,
-		Config:          cfg,
+		globalRatio:     gRatio,
+		committeeRatio:  cRatio,
 	}
 }
 
@@ -49,25 +50,25 @@ func (p *DynamicQuorumPolicy) GetQuorumSize(qcType types.QCType) int {
 	var ratio float64
 	var oldN, newN int
 
-	// 1. 타입에 따른 비율 및 N 선택
 	if qcType == types.QCGlobal {
-		ratio = p.Config.Consensus.GlobalQuorumRatio
-		oldN = p.oldTotalN
-		newN = p.newTotalN
+		ratio = p.globalRatio
+		oldN, newN = p.oldTotalN, p.newTotalN
 	} else {
-		ratio = p.Config.Consensus.CommitteeQuorumRatio
-		oldN = p.oldCommitteeN
-		newN = p.newCommitteeN
+		ratio = p.committeeRatio
+		oldN, newN = p.oldCommitteeN, p.newCommitteeN
 	}
 
-	// 2. 평상시 계산 (n * num / den + 1)
+	calc := func(n int, r float64) int {
+		return int(math.Floor(float64(n)*r)) + 1
+	}
+
 	if !p.isTransitioning {
-		return int(math.Floor(float64(newN)*ratio)) + 1
+		return calc(newN, ratio)
 	}
 
-	// 3. 변환기 보수적 전략
-	oldQ := int(math.Floor(float64(oldN)*ratio)) + 1
-	newQ := int(math.Floor(float64(newN)*ratio)) + 1
+	// 변환기 보수적 전략
+	oldQ := calc(oldN, ratio)
+	newQ := calc(newN, ratio)
 
 	if oldQ > newQ {
 		return oldQ

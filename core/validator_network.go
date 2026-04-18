@@ -2,14 +2,29 @@ package core
 
 import (
 	"arachnet-bft/types"
+	"fmt"
 )
 
-// f.Validator.SendTo(suspectID, req) 해결
-func (v *Validator) SendTo(peerID int, msg *types.Message) {
-	// 실제 전송 로직 (나중에 네트워크 레이어와 연결할 부분일세)
+// Broadcast: Broadcaster 인터페이스 규격 (types.MessageType, interface{}) 준수
+func (v *Validator) Broadcast(msgType types.MessageType, payload interface{}) {
+	v.peersMu.RLock()
+	defer v.peersMu.RUnlock()
+
+	for peerID := range v.Peers {
+		v.SendTo(peerID, msgType, payload)
+	}
 }
 
-// f.Validator.Broadcast(req) 해결
-func (v *Validator) Broadcast(msg *types.Message) {
-	// 모든 피어에게 SendTo를 호출하는 반복문이 들어갈 걸세
+// SendTo: Broadcaster 인터페이스 규격 준수
+func (v *Validator) SendTo(targetID int, msgType types.MessageType, payload interface{}) {
+	// 여기서 나중에 NetworkManager나 실제 P2P 레이어를 호출하면 되네.
+	// 지금은 Proposer가 던진 데이터를 전송하는 시뮬레이션만 하세.
+	fmt.Printf("[RELAY] Validator %d -> Peer %d: [%v] 전송 시도\n", v.ID, targetID, msgType)
+}
+
+// Multicast: Broadcaster 인터페이스 규격 준수
+func (v *Validator) Multicast(committee []int, msgType types.MessageType, payload interface{}) {
+	for _, peerID := range committee {
+		v.SendTo(peerID, msgType, payload)
+	}
 }

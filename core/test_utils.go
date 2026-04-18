@@ -8,11 +8,15 @@ import (
 // CreateDummyVertex: 라운드와 부모를 지정하면 테스트용 Vertex를 만들어주네.
 func CreateDummyVertex(author int, round int, parents []string, signer *Ed25519Signer) *types.Vertex {
 	vtx := &types.Vertex{
-		Author:    author,
-		Round:     round,
-		Parents:   parents,
-		ParentQC:  &types.QC{},
-		Timestamp: time.Now().Unix(),
+		Author:  author,
+		Round:   round,
+		Parents: parents,
+		ParentQCs: []*types.QC{{
+			Type:       types.QCGlobal,
+			Round:      round - 1, // 보통 부모는 이전 라운드니까 말이네.
+			VertexHash: "dummy_parent_hash",
+		}},
+		Timestamp: time.Now().UnixMilli(),
 		Payload:   [][]byte{[]byte("test_transaction")},
 	}
 

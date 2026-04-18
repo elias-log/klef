@@ -45,6 +45,7 @@ package core
 
 import (
 	"arachnet-bft/config"
+	"arachnet-bft/consensus"
 	"arachnet-bft/core/validation"
 	"arachnet-bft/types"
 	"context"
@@ -64,17 +65,22 @@ type Validator struct {
 	Fetcher           *VertexFetcher
 	Slasher           *Slasher
 	messageValidators map[types.MessageType]validation.MessageValidator // Starategy Pattern: 메시지 타입별 검증기 보관함일세!
+	Proposer          *consensus.Proposer
+	Policy            consensus.QuorumPolicy
 
 	// [Group 3: Consensust State & Peer Management]
-	Round      int
-	PeerRounds map[int]int  // 노드 ID -> 해당 노드가 알려준 최신 라운드
-	peersMu    sync.RWMutex //
-	Peers      map[int]bool // 현재 연결된 피어들의 ID 저장소 (ID -> 활성화 여부)
+	Round             int
+	lastProposedRound int
+	proposalMu        sync.Mutex
+	PeerRounds        map[int]int  // 노드 ID -> 해당 노드가 알려준 최신 라운드
+	peersMu           sync.RWMutex //
+	Peers             map[int]bool // 현재 연결된 피어들의 ID 저장소 (ID -> 활성화 여부)
 
 	// [Group 4: Async Task & Buffer Management]
 	pendingMu       sync.RWMutex           // pending 맵과 큐를 동시에 보호
 	pendingRequests map[string]PendingMeta // key: PeerID-RequestID 혹은 Hash, value: 요청 시간
 	pendingQueue    PriorityQueue          // 시간 작을수록 루트에 가까움
+	votePool        *VotePool              // 투표를 임시 저장
 
 	// [Group 5: System Control & Networking]
 	ctx        context.Context     // 종료 신호용
@@ -85,33 +91,33 @@ type Validator struct {
 func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 	// 1. 기본 필드 및 맵/채널 초기화
 	v := &Validator{
-		ID:        id,
-		Config:    cfg,
-		Signer:    signer,
-		PublicKey: signer.GetPublicKey(),
-
+		ID:                id,
+		Config:            cfg,
+		Signer:            signer,
+		PublicKey:         signer.GetPublicKey(),
+		lastProposedRound: -1,
 		Peers:             make(map[int]bool),
 		PeerRounds:        make(map[int]int),
 		pendingRequests:   make(map[string]PendingMeta),
+		votePool:          NewVotePool(),
 		messageValidators: make(map[types.MessageType]validation.MessageValidator),
 		InboundMsg:        make(chan *types.Message, cfg.Resource.ValidatorChannelSize),
 	}
 
-	// 2. 하위 엔진(Components) 생성 및 의존성 주입 (Dependency Injection)
+	v.Policy = consensus.NewDynamicQuorumPolicy(
+		4, // cfg.Consensus.TotalNodes 등으로 교체하게나
+		4, // cfg.Consensus.CommitteeNodes 등으로 교체하게나
+		cfg.Consensus.GlobalQuorumRatio,
+		cfg.Consensus.CommitteeQuorumRatio,
+	)
+	v.Proposer = consensus.NewProposer(v, v.Policy, v)
 	v.Slasher = NewSlasher(cfg)
-
-	// Fetcher 생성 (Validator 참조 주입)
 	v.Fetcher = &VertexFetcher{
 		InboundResponse: make(chan *types.Vertex, cfg.Resource.FetcherChannelSize),
 		Validator:       v,
 	}
-
-	// DAG 생성 (Fetcher를 인터페이스로 주입)
 	v.DAG = NewDAG(v.Fetcher, cfg)
-
-	// 3. 메시지 검증 전략(Strategy) 등록
 	v.registerValidators()
-
 	return v
 }
 
@@ -163,4 +169,33 @@ func (v *Validator) IsKnownVertex(hash string) bool {
 func (v *Validator) Sign(data string) types.Signature {
 	// string 해시를 바이트로 변환해서 서명 대리인에게 맡기네.
 	return v.Signer.Sign([]byte(data))
+}
+
+func (v *Validator) GetQuorumPolicy() consensus.QuorumPolicy {
+	return v.Policy
+}
+
+func (v *Validator) QuorumThreshold() int {
+	return v.Policy.GetQuorumSize(types.QCGlobal)
+}
+
+// Proposer가 쓸 수 있게 ID 반환 메서드 추가
+func (v *Validator) GetID() int {
+	return v.ID
+}
+
+// AlreadyProposed: 내가 이 라운드(혹은 그 이전)에 이미 제안했는지 확인하네.
+func (v *Validator) AlreadyProposed(round int) bool {
+	v.proposalMu.Lock()
+	defer v.proposalMu.Unlock()
+	return round <= v.lastProposedRound
+}
+
+// MarkAsProposed: 제안이 성공적으로 전파되었음을 장부에 기록하네.
+func (v *Validator) MarkAsProposed(round int) {
+	v.proposalMu.Lock()
+	defer v.proposalMu.Unlock()
+	if round > v.lastProposedRound {
+		v.lastProposedRound = round
+	}
 }

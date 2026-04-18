@@ -36,13 +36,9 @@ func (v *Validator) handleFetchRequest(msg *types.Message) {
 
 	// 4. 찾은 게 있다면 답장을 보내야지!
 	if len(foundVertices) > 0 {
-		response := &types.Message{
-			FromID:       v.ID,
-			CurrentRound: v.Round,
-			Type:         types.MsgFetchRes,
-			FetchRes:     &types.FetchResponse{Vertices: foundVertices},
-		}
-		v.SendTo(msg.FromID, response)
+		v.SendTo(msg.FromID, types.MsgFetchRes, &types.FetchResponse{
+			Vertices: foundVertices,
+		})
 	}
 }
 

@@ -136,7 +136,9 @@ func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []string)
 		neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
 		f.dispatchFetch(neighbors, hashes)
 	case 3:
-		f.Validator.Broadcast(f.makeFetchReq(hashes))
+		f.Validator.Broadcast(types.MsgFetchReq, &types.FetchRequest{
+			MissingHashes: hashes,
+		})
 	}
 }
 
@@ -159,9 +161,11 @@ func (f *VertexFetcher) dispatchFetch(peerIDs []int, hashes []string) {
 		return
 	}
 
-	req := f.makeFetchReq(hashes)
+	payload := &types.FetchRequest{
+		MissingHashes: hashes,
+	}
 	for _, pid := range peerIDs {
-		f.Validator.SendTo(pid, req)
+		f.Validator.SendTo(pid, types.MsgFetchReq, payload)
 	}
 }
 

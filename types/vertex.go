@@ -35,7 +35,7 @@ type Vertex struct {
 	Author    int      // 생성자 ID
 	Round     int      // 라운드 번호
 	Parents   []string // 부모 Vertex들의 해시 리스트
-	ParentQC  *QC      // 부모들에 대한 Quorum Certificate
+	ParentQCs []*QC    // 부모들에 대한 Quorum Certificate
 	Timestamp int64    // vertex 생성 시점
 	Payload   [][]byte // 포함된 트랜잭션들
 	Signature []byte   // 생성자의 서명
@@ -94,34 +94,34 @@ func (v *Vertex) CalculateHash() string {
 	}
 
 	// 3. ParentQC ([Round(8)] + [VertexHash(len prefix + data)] + [Signatures Count(4)] + [Signatures...])
-	if v.ParentQC != nil {
-		// QC가 있을 때만 기록하세. (genesis 노드는 QC가 없을 수도 있으니!)
-		binary.Write(buf, binary.BigEndian, int8(1)) // QC 존재 여부 플래그
-		binary.Write(buf, binary.BigEndian, int8(v.ParentQC.Type))
-		binary.Write(buf, binary.BigEndian, int64(v.ParentQC.Round))
-		binary.Write(buf, binary.BigEndian, int32(v.ParentQC.ProposerID))
+	binary.Write(buf, binary.BigEndian, int32(len(v.ParentQCs)))
+	for _, qc := range v.ParentQCs {
+		if qc == nil {
+			continue
+		}
 
-		// VertexHash 기록 (길이 접두사 포함)
-		binary.Write(buf, binary.BigEndian, int32(len(v.ParentQC.VertexHash)))
-		buf.WriteString(v.ParentQC.VertexHash)
+		binary.Write(buf, binary.BigEndian, int8(qc.Type))
+		binary.Write(buf, binary.BigEndian, int64(qc.Round))
+		binary.Write(buf, binary.BigEndian, int32(qc.ProposerID))
 
-		// Signatures 정렬 및 기록 (ID 오름차순)
-		ids := make([]int, 0, len(v.ParentQC.Signatures))
-		for id := range v.ParentQC.Signatures {
+		// VertexHash 기록
+		binary.Write(buf, binary.BigEndian, int32(len(qc.VertexHash)))
+		buf.WriteString(qc.VertexHash)
+
+		// Signatures 정렬 및 기록
+		ids := make([]int, 0, len(qc.Signatures))
+		for id := range qc.Signatures {
 			ids = append(ids, id)
 		}
 		sort.Ints(ids)
 
-		// Signatures 기록
-		binary.Write(buf, binary.BigEndian, int32(len(v.ParentQC.Signatures)))
+		binary.Write(buf, binary.BigEndian, int32(len(qc.Signatures)))
 		for _, id := range ids {
-			sig := v.ParentQC.Signatures[id]
-			binary.Write(buf, binary.BigEndian, int32(id))       // 조력자 ID
-			binary.Write(buf, binary.BigEndian, int32(len(sig))) // 서명 길이
-			buf.Write(sig)                                       // 서명 데이터
+			sig := qc.Signatures[id]
+			binary.Write(buf, binary.BigEndian, int32(id))
+			binary.Write(buf, binary.BigEndian, int32(len(sig)))
+			buf.Write(sig)
 		}
-	} else {
-		binary.Write(buf, binary.BigEndian, int8(0)) // QC 없음 플래그
 	}
 
 	// 4. Timestamp

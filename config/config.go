@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 type Config struct {
 	NodeID  int    `yaml:"node_id"`
@@ -96,4 +99,14 @@ func LoadConfig() *Config {
 	cfg.Keypath = "keys/node0.key"
 
 	return cfg
+}
+
+// GetGlobalThreshold: 전체 노드 수 대비 필요한 정족수를 계산하네 (2/3 초과)
+func (c *Config) GetGlobalThreshold(totalNodes int) int {
+	return int(math.Floor(float64(totalNodes)*c.Consensus.GlobalQuorumRatio)) + 1
+}
+
+// GetCommitteeThreshold: 위원회 노드 수 대비 필요한 정족수를 계산하네 (3/4 초과)
+func (c *Config) GetCommitteeThreshold(committeeNodes int) int {
+	return int(math.Floor(float64(committeeNodes)*c.Consensus.CommitteeQuorumRatio)) + 1
 }
