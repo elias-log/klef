@@ -7,15 +7,11 @@
      - LRU (Least Recently Used) 기반 퇴출:
        - Buffer가 꽉 찼을 때(limit 도달), 가장 오래된 고아 Vertex부터 밀어낼 것.
 
-  2. 메모리 누수 방지 (Map Cleanup):
-     - waitingFor[pHash] 슬라이스에서 특정 Vertex가 제거될 때,
-       해당 pHash를 기다리는 자식이 더 이상 없다면 맵에서 키 자체를 삭제할 것.
-
-  3. 상태 추적 방어:
+  2. 상태 추적 방어:
      - missingCount에서 제거된 Vertex가 waitingFor의 다른 모든 위치에서도
        완벽히 제거되었는지 확인하는 '참조 무결성' 검사를 주기적으로 수행할 것.
 
-  4. 비상 조치:
+  3. 비상 조치:
      - 특정 Author(노드)가 생성한 고아 Vertex가 과도하게 많을 경우,
        해당 노드의 메시지 수신을 일시적으로 차단(Rate Limiting)하는 로직과 연계할 것.
 */
@@ -31,6 +27,7 @@ type OrphanBuffer struct {
 	mu           sync.Mutex
 	waitingFor   map[string][]*types.Vertex // 부모 해시 -> 기다리는 자식들
 	missingCount map[string]int             // 자식 해시 -> 부족한 부모 수
+	orphans      map[string]*types.Vertex   // 고아 목록
 	capacity     int                        // [보안] 최대 보관 개수 제한
 }
 
@@ -38,6 +35,7 @@ func NewOrphanBuffer(limit int) *OrphanBuffer {
 	return &OrphanBuffer{
 		waitingFor:   make(map[string][]*types.Vertex),
 		missingCount: make(map[string]int),
+		orphans:      make(map[string]*types.Vertex),
 		capacity:     limit,
 	}
 }
@@ -58,6 +56,7 @@ func (b *OrphanBuffer) AddOrphan(vtx *types.Vertex, missingHashes []string) {
 		return
 	}
 
+	b.orphans[vtx.Hash] = vtx
 	b.missingCount[vtx.Hash] = len(missingHashes)
 	for _, pHash := range missingHashes {
 		b.waitingFor[pHash] = append(b.waitingFor[pHash], vtx)
@@ -86,6 +85,7 @@ func (b *OrphanBuffer) OnParentArrival(pHash string) []*types.Vertex {
 		if newCount <= 0 {
 			readyChildren = append(readyChildren, child)
 			delete(b.missingCount, child.Hash)
+			delete(b.orphans, child.Hash)
 		} else {
 			b.missingCount[child.Hash] = newCount
 		}
@@ -93,4 +93,16 @@ func (b *OrphanBuffer) OnParentArrival(pHash string) []*types.Vertex {
 
 	delete(b.waitingFor, pHash)
 	return readyChildren
+}
+
+func (b *OrphanBuffer) GetOrphanCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.missingCount)
+}
+
+func (b *OrphanBuffer) GetOrphan(hash string) *types.Vertex {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.orphans[hash]
 }

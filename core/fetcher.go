@@ -80,6 +80,11 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 
 	go func() {
 		currentMissing := filtered
+		timer := time.NewTimer(time.Hour)
+		if !timer.Stop() {
+			<-timer.C
+		}
+		defer timer.Stop()
 
 		// [단계별 시나리오: Step 1 ~ 3]
 		// Step 1: Direct Check (Suspect에게 먼저 확인)
@@ -94,10 +99,7 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 
 			// 2. 단계에 맞는 대상에게 요청 발송
 			f.dispatchByStep(step, suspectID, currentMissing)
-
-			// 3. [미래의 핵심] 데이터가 오거나, 타임아웃 될 때까지 대기
-			stepTimeout := f.getStepTimeout(step)
-			timer := time.NewTimer(stepTimeout)
+			timer.Reset(f.getStepTimeout(step))
 
 		waitLoop:
 			for {
@@ -111,11 +113,10 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 					// 아직 다 안 왔으면 계속 기다리거나 다음 단계로 넘어갈 준비를 하네.
 
 				case <-timer.C:
-					// 타임아웃! 다음 단계(Step)로 넘어가서 더 넓게 물어봐야 하네.
+					// 타임아웃! 다음 단계로 넘어가서 더 넓게 물어봐야 하네.
 					break waitLoop
 				}
 			}
-			timer.Stop()
 		}
 
 		// Step 4: 패닉 처리

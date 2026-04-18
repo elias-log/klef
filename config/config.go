@@ -3,6 +3,9 @@ package config
 import "time"
 
 type Config struct {
+	NodeID  int    `yaml:"node_id"`
+	Keypath string `yaml:"keypath"`
+
 	DAG       DAGConfig
 	Sync      SyncConfig
 	Request   RequestConfig
@@ -48,7 +51,6 @@ type ResourceConfig struct {
 	ValidatorChannelSize int `yaml:"validator_channel_size"`
 }
 
-
 func DefaultConfig() *Config {
 	return &Config{
 		DAG: DAGConfig{
@@ -82,4 +84,16 @@ func DefaultConfig() *Config {
 			ValidatorChannelSize: 1024,
 		},
 	}
+}
+
+func LoadConfig() *Config {
+	cfg := DefaultConfig()
+
+	// TODO: 파일(YAML)을 읽어 cfg에 덮어쓰기
+	//data, _ := os.ReadFile("config.yaml")
+	//yaml.Unmarshal(data, cfg) // 파일 내용으로 기본값을 덮어버림세!
+	cfg.NodeID = 0
+	cfg.Keypath = "keys/node0.key"
+
+	return cfg
 }

@@ -85,23 +85,31 @@ func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
 
 func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
-	//Hash가 맞는지 직접 계산
-	calculatedHash := vtx.CalculateHash()
-	vtx.Hash = calculatedHash
+	// 1. 중복 체크
+	if d.GetVertex(vtx.Hash) != nil {
+		return
+	}
 
-	// 1. 없는 부모들 확인
+	// 2. 해시 검증
+	calculatedHash := vtx.CalculateHash()
+	if vtx.Hash != calculatedHash {
+		fmt.Printf("[ERROR] DAG: 해시 불일치! 위변조 의심: %s != %s\n", vtx.Hash, calculatedHash)
+		return
+	}
+
+	// 3. 없는 부모들 확인
 	missing := d.GetMissingHashes(vtx.Parents)
 
-	// 2. 부모가 하나라도 없다면 대기실(Buffer)행
+	// 3. 부모가 하나라도 없다면 Buffer로!
 	if len(missing) > 0 {
 		//Log
 		fmt.Printf("[DEBUG] DAG: Vertex %s 는 고아일세. 누락된 부모: %v\n", vtx.Hash[:8], missing)
 
 		d.Buffer.AddOrphan(vtx, missing)
 
-		// 라운드 차이가 크면 Fetch 요청
-		roundLag := currentNodeRound - vtx.Round
-		if roundLag > d.Config.DAG.SyncTriggerThreshold {
+		// Sync: 내 라운드보다 훨씬 높은 녀석이 오면 내가 뒤처진 걸세!
+		diff := vtx.Round - currentNodeRound
+		if diff > d.Config.DAG.SyncTriggerThreshold {
 			d.Fetcher.StartSync(missing, vtx.Author)
 		}
 		return
@@ -109,8 +117,7 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 	// TODO: validateVertex(vtx)
 
-	// 3. 부모가 다 있다면 정식 삽입!
-	fmt.Printf("[DEBUG] DAG: Vertex %s 정식 삽입 성공!\n", vtx.Hash[:8])
+	// 4. 부모가 다 있다면 정식 삽입!
 	d.insert(vtx)
 }
 
@@ -145,7 +152,7 @@ func (d *DAG) insert(initialVtx *types.Vertex) {
 		worklist = worklist[1:]
 
 		d.mu.Lock()
-		// 이미 들어온 녀석인지 확인 (중복 방지)
+		// 중복 방지
 		if _, exists := d.Vertices[vtx.Hash]; exists {
 			d.mu.Unlock()
 			continue
@@ -156,11 +163,11 @@ func (d *DAG) insert(initialVtx *types.Vertex) {
 		d.RoundIndex[vtx.Round] = append(d.RoundIndex[vtx.Round], vtx.Hash)
 		d.mu.Unlock()
 
-		// 3. 대기실(Buffer)에 "야, 니네 부모 왔다!"라고 말하고 데려오네.
-		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
+		// Log
+		fmt.Printf("[DEBUG] DAG: Vertex %s 정식 삽입 성공!\n", vtx.Hash[:8])
 
-		// 4. 해방된 자식들을 '할 일 목록' 뒤에 추가하세.
-		// 이 루프가 다시 돌면서 자식들도 차례대로 삽입될 걸세.
+		// 3. 연쇄 반응: 이 부모를 기다리던 자식들을 워크리스트에 추가
+		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
 		if len(readyChildren) > 0 {
 			worklist = append(worklist, readyChildren...)
 		}
