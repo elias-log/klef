@@ -77,10 +77,8 @@ type Validator struct {
 	Peers             map[int]bool // 현재 연결된 피어들의 ID 저장소 (ID -> 활성화 여부)
 
 	// [Group 4: Async Task & Buffer Management]
-	pendingMu       sync.RWMutex           // pending 맵과 큐를 동시에 보호
-	pendingRequests map[string]PendingMeta // key: PeerID-RequestID 혹은 Hash, value: 요청 시간
-	pendingQueue    PriorityQueue          // 시간 작을수록 루트에 가까움
-	votePool        *VotePool              // 투표를 임시 저장
+	pendingMgr *PendingManager
+	votePool   *VotePool // 투표를 임시 저장
 
 	// [Group 5: System Control & Networking]
 	ctx        context.Context     // 종료 신호용
@@ -98,7 +96,7 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 		lastProposedRound: -1,
 		Peers:             make(map[int]bool),
 		PeerRounds:        make(map[int]int),
-		pendingRequests:   make(map[string]PendingMeta),
+		pendingMgr:        NewPendingManager(cfg),
 		votePool:          NewVotePool(),
 		messageValidators: make(map[types.MessageType]validation.MessageValidator),
 		InboundMsg:        make(chan *types.Message, cfg.Resource.ValidatorChannelSize),
@@ -134,22 +132,26 @@ func (v *Validator) registerValidators() {
 func (v *Validator) Start(ctx context.Context) {
 	v.ctx, v.cancel = context.WithCancel(ctx)
 
-	// 1. 장부 정리 고루틴 실행
-	go v.startPendingCleanup()
+	// 1. 펜딩 매니저 실행
+	go v.pendingMgr.StartCleanupLoop(v.ctx)
 
 	// 2. 메시지 라우팅 루프 실행
-	go func() {
-		fmt.Printf("[SYSTEM] Validator %d: Message routing loop started.\n", v.ID)
-		for {
-			select {
-			case msg := <-v.InboundMsg:
-				v.routeMessage(msg)
-			case <-v.ctx.Done():
-				fmt.Printf("[SYSTEM] Validator %d: Shutting down...\n", v.ID)
-				return
-			}
+	go v.runMessageLoop()
+}
+
+func (v *Validator) runMessageLoop() {
+	fmt.Printf("[SYSTEM] Validator %d: Message routing loop started.\n", v.ID)
+
+	for {
+		select {
+		case msg := <-v.InboundMsg:
+			v.routeMessage(msg)
+
+		case <-v.ctx.Done():
+			fmt.Printf("[SYSTEM] Validator %d: Shutting down...\n", v.ID)
+			return
 		}
-	}()
+	}
 }
 
 // Stop: 안전하게 시스템을 멈추네.

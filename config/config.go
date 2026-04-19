@@ -69,7 +69,7 @@ func DefaultConfig() *Config {
 			MaxRandomPeers: 3,
 		},
 		Request: RequestConfig{
-			BaseTimeout:           10 * time.Second,
+			BaseTimeout:           500 * time.Millisecond,
 			MaxBackoff:            640 * time.Second, // 10s * 2^6 (최대 6회 리트라이 가정)
 			MaxFetchRequestHashes: 100,
 			MaxFetchResponseVtx:   50,

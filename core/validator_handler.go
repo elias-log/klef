@@ -5,9 +5,8 @@ import (
 	"fmt"
 )
 
-// 공통 검증 진입점: handle 함수들이 호출하기 전에 거쳐가는 관문이라네.
+// preValidate: 메시지 타입별 전략(Strategy) 검증기를 실행하네.
 func (v *Validator) preValidate(msg *types.Message) error {
-	// 이제 MessageValidator는 validation 패키지에 있네!
 	if val, ok := v.messageValidators[msg.Type]; ok {
 		// 여기서 v(Validator)는 ValidatorContext 인터페이스로 전달되네!
 		return val.Validate(msg, v)
@@ -17,24 +16,24 @@ func (v *Validator) preValidate(msg *types.Message) error {
 }
 
 func (v *Validator) handleFetchRequest(msg *types.Message) {
-	// 1. 관문 통과!
-	if err := v.preValidate(msg); err != nil {
-		fmt.Printf("검증 실패(Req): %v\n", err)
+	// [Updated] 이미 routeMessage에서 preValidate를 거쳤으므로 제거됨
+
+	// 1. 페이로드에서 요청된 해시 목록을 꺼내네.
+	req := msg.FetchReq
+	if req == nil {
 		return
 	}
 
-	// 2. 페이로드에서 요청된 해시 목록을 꺼내네.
-	req := msg.FetchReq
 	var foundVertices []*types.Vertex
 
-	// 3. 내 DAG를 뒤져서 있는 것만 골라 담게나.
+	// 2. 내 DAG를 뒤져서 있는 것만 골라 담게나.
 	for _, h := range req.MissingHashes {
 		if vtx := v.DAG.GetVertex(h); vtx != nil {
 			foundVertices = append(foundVertices, vtx)
 		}
 	}
 
-	// 4. 찾은 게 있다면 답장을 보내야지!
+	// 3. 찾은 게 있다면 답장을 보내야지!
 	if len(foundVertices) > 0 {
 		v.SendTo(msg.FromID, types.MsgFetchRes, &types.FetchResponse{
 			Vertices: foundVertices,
@@ -44,37 +43,27 @@ func (v *Validator) handleFetchRequest(msg *types.Message) {
 
 func (v *Validator) handleFetchResponse(msg *types.Message) {
 
-	if msg.FetchRes == nil {
-		return
-	}
-
-	// Log
-	fmt.Printf("[DEBUG] Validator %d: handleFetchResponse 시작됨! (Vertex 수: %d)\n", v.ID, len(msg.FetchRes.Vertices))
-
-	// 1. 관문 통과
-	if err := v.preValidate(msg); err != nil {
-		fmt.Printf("[WARN] Validator %d: FetchResponse validation failed: %v\n", v.ID, err)
-		return
-	}
-
-	// 2. 페이로드에서 Vertex 뭉치를 꺼내네.
 	res := msg.FetchRes
+	if res == nil {
+		return
+	}
+	fmt.Printf("[DEBUG] Validator %d: Handling FetchResponse with %d vertices\n", v.ID, len(res.Vertices))
 
-	// 3. 받은 Vertex들을 처리하네.
+	// 받은 Vertex들을 처리하네.
 	for _, vtx := range res.Vertices {
-		// Log
-		fmt.Printf("[DEBUG] 핸들러 유입 Vertex - Payload 명시 해시: %s, 실제 객체 내부 해시: %s\n", vtx.Hash, vtx.CalculateHash())
-
 		// 1. [체크] 이미 DAG에 있다면, Fetcher에게 또 보낼 필요도 없네.
 		if v.DAG.GetVertex(vtx.Hash) != nil {
 			continue
 		}
 
-		// 2. [저장] 먼저 DAG에 안전하게 모셔두게나.
-		// AddVertex가 성공했을 때만 후속 조치를 취하는 게 안전하네.
+		// 2. [저장] DAG에 저장.
+		// 이 과정에서 부모가 없으면 OrphanBuffer로 들어가고, 있으면 정식 삽입되겠지.
 		v.DAG.AddVertex(vtx, v.Round)
 
-		// 3. [피드백] 이제 데이터가 DAG에 확실히 있으니 Fetcher에게 알려주세.
+		// 3. [펜딩맵 업데이트] 데이터가 도착했으니 PendingManager에서 해당 해시의 추적을 종료하네.
+		v.pendingMgr.Remove(vtx.Hash)
+
+		// 4. [피드백] 이제 데이터가 DAG에 확실히 있으니 Fetcher에게 알려주세.
 		// Fetcher가 이 Vertex를 기다리고 있을 수 있으니 채널로 쏴주네.
 		// 비동기 처리를 위해 select를 사용하여 채널이 가득 찼을 때의 블로킹을 방지하세.
 		select {
@@ -95,10 +84,11 @@ func (v *Validator) routeMessage(msg *types.Message) {
 	if err := v.preValidate(msg); err != nil {
 		fmt.Printf("[WARN] Validator %d: Pre-validation failed for %s from %d: %v\n",
 			v.ID, msg.Type, msg.FromID, err)
+		//TODO: Slasher가 여기서 악의적 노드 점수를 깎을 예정일세.
 		return
 	}
 
-	// 2. 타입별 핸들러 호출
+	// 2. 메시지 라우팅
 	switch msg.Type {
 	case types.MsgFetchReq:
 		v.handleFetchRequest(msg)

@@ -33,42 +33,14 @@ type VertexFetcher struct {
 	Validator       *Validator         // 부모 노드 정보와 통신 인터페이스를 쓰기 위함일세
 }
 
-// getFilteredNeighbors: 물어볼 이웃을 고르되, 이미 물어본 suspectID는 제외하네.
-func (f *VertexFetcher) getFilteredNeighbors(count int, suspectID int) []int {
-	// Validator를 통해 주변 피어들을 가져오네.
-	peers := f.Validator.GetRandomPeers(count)
-
-	filtered := make([]int, 0, len(peers))
-	for _, pid := range peers {
-		if pid != suspectID {
-			filtered = append(filtered, pid)
-		}
-	}
-	return filtered
-}
-
-// makeFetchReq: 누락된 해시들을 담은 FETCH_REQ 타입의 공통 메시지를 생성하네.
-func (f *VertexFetcher) makeFetchReq(hashes []string) *types.Message {
-	return &types.Message{
-		FromID: f.Validator.ID,
-		Type:   types.MsgFetchReq, // "FETCH_REQ" 상수를 사용하세.
-		FetchReq: &types.FetchRequest{
-			MissingHashes: hashes,
-		},
-	}
-}
-
 // StartSync: 특정 해시의 Vertex가 없을 때 네트워크에 요청을 보냄
 func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
-	// 1. 요청 관리 상태 (이건 구조체 멤버로 두는 게 좋네)
-	// type RequestState struct { attempts int, askedPeers map[int]bool }
 
-	// Hash 단위 필터링으로 고루틴 폭발 방어
+	// [PendingManager 적용] Hash 단위 필터링
 	filtered := make([]string, 0)
 	for _, h := range missingHashes {
-		// 이미 요청 중인 해시는 중복 요청하지 않네!
-		if !f.Validator.IsRequestPending(h) {
-			f.Validator.AddPendingRequest(h)
+		if !f.Validator.pendingMgr.IsPending(h) {
+			f.Validator.pendingMgr.Add(h)
 			filtered = append(filtered, h)
 		}
 	}
@@ -115,6 +87,10 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 				case <-timer.C:
 					// 타임아웃! 다음 단계로 넘어가서 더 넓게 물어봐야 하네.
 					break waitLoop
+
+				case <-f.Validator.ctx.Done():
+					// 시스템 종료 시 고루틴도 종료하네.
+					return
 				}
 			}
 		}
@@ -126,6 +102,31 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 			f.handlePanic(finalMissing)
 		}
 	}()
+}
+
+// getFilteredNeighbors: 물어볼 이웃을 고르되, 이미 물어본 suspectID는 제외하네.
+func (f *VertexFetcher) getFilteredNeighbors(count int, suspectID int) []int {
+	// Validator를 통해 주변 피어들을 가져오네.
+	peers := f.Validator.GetRandomPeers(count)
+
+	filtered := make([]int, 0, len(peers))
+	for _, pid := range peers {
+		if pid != suspectID {
+			filtered = append(filtered, pid)
+		}
+	}
+	return filtered
+}
+
+// makeFetchReq: 누락된 해시들을 담은 FETCH_REQ 타입의 공통 메시지를 생성하네.
+func (f *VertexFetcher) makeFetchReq(hashes []string) *types.Message {
+	return &types.Message{
+		FromID: f.Validator.ID,
+		Type:   types.MsgFetchReq, // "FETCH_REQ" 상수를 사용하세.
+		FetchReq: &types.FetchRequest{
+			MissingHashes: hashes,
+		},
+	}
 }
 
 func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []string) {
@@ -176,4 +177,6 @@ func (f *VertexFetcher) handlePanic(hashes []string) {
 	// 검증 중단: 해당 Vertex를 OrphanBuffer에서 영구히 지우거나, 일정 시간 뒤에 아주 긴 주기로 다시 시도하는 'Cold Storage'로 보내야 하네.
 	// Slashing: 만약 특정 노드가 계속 데이터를 안 준다면, 그놈을 Byzantine으로 간주하고 평판을 깎아야 하네.
 	fmt.Printf("[CRITICAL] Data missing after full broadcast: %v\n", hashes)
+	// TODO: 여기서 지수 백오프가 최대치(15회)에 도달했음에도 못 찾았다면
+	// 이 해시들을 'Blacklist'에 넣거나 관리자에게 알람을 주는 로직을 고민해봄직하네.
 }
