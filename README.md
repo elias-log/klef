@@ -1,6 +1,6 @@
 # arachnet-bft
 
-1️. Whitepaper
+## 1️. Whitepaper
 
 This project aims to address two fundamental limitations of existing blockchain systems. First, the reliance on a global state model enforces sequential execution, severely limiting parallelism. Second, systems that adopt optimistic execution for better user experience often sacrifice global consistency. To overcome these issues, this design introduces a hybrid architecture that combines an object-centric state model, a global data DAG (Data Availability & Ordering Layer), and a sharded BFT-based execution layer using Jolteon-style consensus.
 
@@ -20,34 +20,34 @@ Ultimately, this system is not designed to be the fastest blockchain in absolute
 
 
 
-
-2. Implementation Waypoints
+------------------------------
+## 2. Implementation Waypoints
 
 This project cannot be implemented in a single step. Instead, it must evolve incrementally under the principle of introducing only one new source of complexity at a time. The ultimate goal is a system combining a data DAG with a sharded Jolteon-based consensus layer, but the initial focus must be on building a deterministic state machine without consensus or sharding.
 
-Phase 0: DAG Structure and Synchronization (Now)
+### Phase 0: DAG Structure and Synchronization (Now)
 The goal is to construct a DAG with parent references and ensure it can be shared and reconstructed across nodes. At this stage, transactions carry no semantic meaning. Orphan handling must be implemented, buffering nodes whose parents have not yet arrived. The result is a consistent DAG structure across nodes given the same inputs.
 
-Phase 1: Single-node State Machine
+### Phase 1: Single-node State Machine
 Introduce the object model and transaction execution logic. Each object has an ID and version, and transactions consume specific versions to produce new ones. Executing transactions in topological order must always yield the same state. The result is a fully deterministic execution environment on a single node.
 
-Phase 2: Deterministic Conflict Resolution (Tie-breaking)
+### Phase 2: Deterministic Conflict Resolution (Tie-breaking)
 Define rules for resolving conflicts when multiple transactions attempt to consume the same object version. For example, selecting the transaction with the lowest hash. This rule becomes the foundation for consistency across nodes. The result is that identical inputs always lead to identical outcomes, regardless of execution order.
 
-Phase 3: Multi-node Deterministic Replay
+### Phase 3: Multi-node Deterministic Replay
 Extend the system to multiple nodes. Even if transactions are received in different orders, all nodes must converge to the same state using the DAG and conflict resolution rules. Gossip-based propagation and DAG merging are introduced. The key property validated here is that outcomes are rule-driven, not order-driven.
 
-Phase 4: Dependency Tracking and Rollback Propagation
+### Phase 4: Dependency Tracking and Rollback Propagation
 Track dependencies between transactions via the DAG. When a transaction is invalidated, all dependent transactions must also be invalidated. The system must ensure deterministic rollback propagation across all nodes.
 
-Phase 5: Single-committee Consensus (Jolteon-lite)
+### Phase 5: Single-committee Consensus (Jolteon-lite)
 Introduce a basic consensus mechanism by treating the entire network as a single committee. Implement leader proposal, voting, and QC generation. QC acts as optimistic confirmation and is attached to DAG entries.
 
-Phase 6: Sharding (No Cross-shard Transactions)
+### Phase 6: Sharding (No Cross-shard Transactions)
 Partition the network into multiple shards, each executing transactions independently. Cross-shard transactions are not yet allowed. The goal is to validate scalability and stability as the number of shards increases.
 
-Phase 7: Cross-shard Interaction via DAG Observation
+### Phase 7: Cross-shard Interaction via DAG Observation
 Enable shards to observe and validate the outputs of other shards via the global DAG. Execution remains local, but validation incorporates global information. Dependency graphs now span across shards.
 
-Phase 8: Anchoring and Global Ordering
+### Phase 8: Anchoring and Global Ordering
 Define a deterministic anchoring mechanism to finalize the global state. A snapshot of the DAG is taken, transactions are topologically sorted, and conflicts are resolved globally. The result is a consistent final state across all nodes.
