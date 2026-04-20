@@ -39,6 +39,9 @@ type RequestConfig struct {
 }
 
 type ConsensusConfig struct {
+	TotalNodes     int `yaml:"total_nodes"`     // 시스템의 전체 노드 수 (n)
+	CommitteeNodes int `yaml:"committee_nodes"` // 위원회 노드 수
+
 	// 정족수 계산을 위한 비율 (0.0 ~ 1.0)
 	GlobalQuorumRatio    float64 `yaml:"global_quorum_ratio"`    // 0.67 (2/3)
 	CommitteeQuorumRatio float64 `yaml:"committee_quorum_ratio"` // 0.75 (3/4)
@@ -75,6 +78,8 @@ func DefaultConfig() *Config {
 			MaxFetchResponseVtx:   50,
 		},
 		Consensus: ConsensusConfig{
+			TotalNodes:           4, // 기본 n=4 (3f+1 구조의 최소 단위)
+			CommitteeNodes:       4, // 일단 전체가 위원회라고 가정하세
 			GlobalQuorumRatio:    0.67,
 			CommitteeQuorumRatio: 0.75,
 		},

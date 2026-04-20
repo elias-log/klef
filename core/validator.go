@@ -31,15 +31,6 @@
 //    - 현재 startPendingCleanup은 만료된 항목을 '제거'만 수행함.
 //    - 의도: 제거 시점에 해당 Hash를 Fetcher나 별도의 RetryBuffer에 넘겨
 //      네트워크에 재요청(Re-dispatch)을 보내는 로직이 연계되어야 함.
-//
-// 2. 시스템 불변성(Invariant) 보장:
-//    - 하나의 Hash에 대해 "현재 유효한(Active) 요청은 반드시 최대 1개"여야 함.
-//    - 모든 상태 판단은 ExpiryTime을 절대적 기준으로 삼음 (RequestTime은 기록용).
-//    - 큐(PriorityQueue)와 맵(Map)의 데이터 정합성이 깨질 경우, 항상 맵(진실)을 기준으로 큐를 정리함.
-//
-// 3. 멱등성(Idempotency):
-//    - 네트워크 지연으로 인한 중복 응답은 DAG.AddVertex의 존재 확인 로직에서
-//      자연스럽게 필터링되도록 설계됨 (At-least-once delivery 수용).
 
 package core
 
@@ -53,6 +44,9 @@ import (
 	"sync"
 )
 
+// [Updated]
+// Validator는 시스템의 Orchestrator일세.
+// 직접 로직을 수행하기보다 하위 컴포넌트들을 조율하는 역할에 집중하네.
 type Validator struct {
 	// [Group 1: Identity & Static]
 	ID        int
@@ -60,15 +54,15 @@ type Validator struct {
 	Config    *config.Config
 
 	// [Group 2: Core Components / Dependencies]
-	Signer            types.Signer // 서명용 툴일세 e.g.,Ed25519Signer, BLSSigner
+	Signer            types.Signer
 	DAG               *DAG
 	Fetcher           *VertexFetcher
 	Slasher           *Slasher
-	messageValidators map[types.MessageType]validation.MessageValidator // Starategy Pattern: 메시지 타입별 검증기 보관함일세!
+	messageValidators map[types.MessageType]validation.MessageValidator
 	Proposer          *consensus.Proposer
 	Policy            consensus.QuorumPolicy
 
-	// [Group 3: Consensust State & Peer Management]
+	// [Group 3: Consensus State & Peer Management]
 	Round             int
 	lastProposedRound int
 	proposalMu        sync.Mutex
@@ -102,9 +96,10 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 		InboundMsg:        make(chan *types.Message, cfg.Resource.ValidatorChannelSize),
 	}
 
+	// 정책 및 엔진 초기화
 	v.Policy = consensus.NewDynamicQuorumPolicy(
-		4, // cfg.Consensus.TotalNodes 등으로 교체하게나
-		4, // cfg.Consensus.CommitteeNodes 등으로 교체하게나
+		cfg.Consensus.TotalNodes,
+		cfg.Consensus.CommitteeNodes,
 		cfg.Consensus.GlobalQuorumRatio,
 		cfg.Consensus.CommitteeQuorumRatio,
 	)
@@ -115,6 +110,7 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 		Validator:       v,
 	}
 	v.DAG = NewDAG(v.Fetcher, cfg)
+
 	v.registerValidators()
 	return v
 }
@@ -131,12 +127,8 @@ func (v *Validator) registerValidators() {
 // Start: Validator의 모든 엔진에 시동을 거네!
 func (v *Validator) Start(ctx context.Context) {
 	v.ctx, v.cancel = context.WithCancel(ctx)
-
-	// 1. 펜딩 매니저 실행
-	go v.pendingMgr.StartCleanupLoop(v.ctx)
-
-	// 2. 메시지 라우팅 루프 실행
-	go v.runMessageLoop()
+	go v.pendingMgr.StartCleanupLoop(v.ctx) // 펜딩 매니저 실행
+	go v.runMessageLoop()                   // 메시지 라우팅 루프 실행
 }
 
 func (v *Validator) runMessageLoop() {
@@ -145,6 +137,7 @@ func (v *Validator) runMessageLoop() {
 	for {
 		select {
 		case msg := <-v.InboundMsg:
+			// routeMessage 로직은 나중에 분량에 따라 이동 고려
 			v.routeMessage(msg)
 
 		case <-v.ctx.Done():
@@ -154,50 +147,6 @@ func (v *Validator) runMessageLoop() {
 	}
 }
 
-// Stop: 안전하게 시스템을 멈추네.
 func (v *Validator) Stop() {
 	v.cancel()
-}
-
-// [ValidatorContext 인터페이스 구현부]
-func (v *Validator) GetCurrentRound() int {
-	return v.Round
-}
-
-func (v *Validator) IsKnownVertex(hash string) bool {
-	return v.DAG.GetVertex(hash) != nil
-}
-
-func (v *Validator) Sign(data string) types.Signature {
-	// string 해시를 바이트로 변환해서 서명 대리인에게 맡기네.
-	return v.Signer.Sign([]byte(data))
-}
-
-func (v *Validator) GetQuorumPolicy() consensus.QuorumPolicy {
-	return v.Policy
-}
-
-func (v *Validator) QuorumThreshold() int {
-	return v.Policy.GetQuorumSize(types.QCGlobal)
-}
-
-// Proposer가 쓸 수 있게 ID 반환 메서드 추가
-func (v *Validator) GetID() int {
-	return v.ID
-}
-
-// AlreadyProposed: 내가 이 라운드(혹은 그 이전)에 이미 제안했는지 확인하네.
-func (v *Validator) AlreadyProposed(round int) bool {
-	v.proposalMu.Lock()
-	defer v.proposalMu.Unlock()
-	return round <= v.lastProposedRound
-}
-
-// MarkAsProposed: 제안이 성공적으로 전파되었음을 장부에 기록하네.
-func (v *Validator) MarkAsProposed(round int) {
-	v.proposalMu.Lock()
-	defer v.proposalMu.Unlock()
-	if round > v.lastProposedRound {
-		v.lastProposedRound = round
-	}
 }

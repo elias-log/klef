@@ -22,7 +22,7 @@ type FetchRequestValidator struct {
 	MaxRequestHashes int // 한 번에 요청할 수 있는 최대 해시 수
 }
 
-func (f *FetchRequestValidator) Validate(msg *types.Message, ctx ValidatorContext) error {
+func (f *FetchRequestValidator) Validate(msg *types.Message, ctx types.StateReader) error {
 
 	if msg.FetchReq == nil {
 		return errors.New("message does not contain a FetchRequest")
@@ -47,7 +47,7 @@ type FetchResponseValidator struct {
 	MaxVertexCount int
 }
 
-func (f *FetchResponseValidator) Validate(msg *types.Message, ctx ValidatorContext) error {
+func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.StateReader) error {
 	if msg.FetchRes == nil {
 		return errors.New("message does not contain a FetchResponse")
 	}
@@ -61,48 +61,47 @@ func (f *FetchResponseValidator) Validate(msg *types.Message, ctx ValidatorConte
 		return errors.New("too many vertices in response")
 	}
 
-	currRound := ctx.GetCurrentRound()
-
 	// 2. 각 Vertex의 개별 무결성 및 의미 검증
 	for _, vtx := range res.Vertices {
-		// [검증] 결정론적 해시 무결성
+		// 1. [비용 최저] 이미 아는 데이터인가? (중복 방어)
+		if ctx.IsKnownVertex(vtx.Hash) {
+			continue
+		}
+
+		// 2. [비용 저] 내가 요청한 데이터인가? (Spam 방어)
+		// 이 검증이 해시 계산보다 앞에 오는 것이 CPU 보호에 유리하네.
+		if !ctx.IsRequestPending(vtx.Hash) {
+			return errors.New("unsolicited vertex received: spam attack suspected")
+		}
+
+		// 3. [비용 중] 라운드 범위 체크 (가장 기본적인 프로토콜 위반 확인)
+		currRound := ctx.GetCurrentRound()
+		if vtx.Round > currRound+10 || (currRound > 50 && vtx.Round < currRound-50) {
+			return fmt.Errorf("vertex %s round out of valid range", vtx.Hash)
+		}
+
+		// 4. [비용 고] 해시 무결성 검증 (이제야 비로소 CPU를 써서 계산하세!)
 		if vtx.Hash != vtx.CalculateHash() {
 			return fmt.Errorf("hash mismatch for vertex: %s", vtx.Hash)
 		}
 
-		// [검증] 요청한 vertex가 맞는지 확인
-		if !ctx.IsRequestPending(vtx.Hash) {
-			return errors.New("unsolicited vertex received: i didn't ask for this!")
-		}
-
-		// [검증] 라운드 범위 (미래 & 과거 방어)
-		// 너무 먼 미래(+10) 데이터는 프로토콜 위반일세.
-		if vtx.Round > currRound+10 {
-			return fmt.Errorf("vertex %s is too far in future (Round: %d, Current: %d)", vtx.Hash, vtx.Round, currRound)
-		}
-		// 너무 오래된 데이터(예: 50라운드 전)는 메모리 낭비이니 거절하세.
-		if currRound > 50 && vtx.Round < currRound-50 {
-			return fmt.Errorf("vertex %s is too old (Round: %d, Current: %d)", vtx.Hash, vtx.Round, currRound)
-		}
-
-		// [검증 C] 중복 검증 (이미 우리 DAG에 있는가?)
-		if ctx.IsKnownVertex(vtx.Hash) {
-			// 이건 에러라기보다 효율성의 문제니, 로그만 남기고 넘어가도 좋네.
-			continue
-		}
-
-		// [검증 D] 구조적 정합성 기초 확인
+		// 5. [구조 검증] DAG 규칙 확인
 		// 0라운드(Genesis)가 아닌데 부모가 없다면 가짜일세.
 		if vtx.Round > 0 && len(vtx.Parents) == 0 {
 			return fmt.Errorf("non-genesis vertex %s has no parents", vtx.Hash)
 		}
 
-		// 자기 자신을 부모로 가질 수는 없네 (DAG의 기본 원칙!)
+		parentSet := make(map[string]struct{})
 		for _, pHash := range vtx.Parents {
 			if pHash == vtx.Hash {
-				return fmt.Errorf("vertex %s contains itself as a parent (Circular!)", vtx.Hash)
+				return fmt.Errorf("circular reference in vertex %s", vtx.Hash)
 			}
+			if _, exists := parentSet[pHash]; exists {
+				return fmt.Errorf("duplicate parent %s in vertex %s", pHash, vtx.Hash)
+			}
+			parentSet[pHash] = struct{}{}
 		}
+		return nil
 	}
 
 	return nil

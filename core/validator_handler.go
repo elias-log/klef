@@ -51,21 +51,20 @@ func (v *Validator) handleFetchResponse(msg *types.Message) {
 
 	// 받은 Vertex들을 처리하네.
 	for _, vtx := range res.Vertices {
-		// 1. [체크] 이미 DAG에 있다면, Fetcher에게 또 보낼 필요도 없네.
+		// 1. [중복체크] 이미 DAG에 있다면, Fetcher에게 또 보낼 필요도 없네.
 		if v.DAG.GetVertex(vtx.Hash) != nil {
 			continue
 		}
 
-		// 2. [저장] DAG에 저장.
+		// 2. [펜딩맵 업데이트] 데이터가 도착했으니 PendingManager에서 해당 해시의 추적을 종료하네.
+		v.pendingMgr.Remove(vtx.Hash)
+
+		// 3. [저장] DAG에 저장.
 		// 이 과정에서 부모가 없으면 OrphanBuffer로 들어가고, 있으면 정식 삽입되겠지.
 		v.DAG.AddVertex(vtx, v.Round)
 
-		// 3. [펜딩맵 업데이트] 데이터가 도착했으니 PendingManager에서 해당 해시의 추적을 종료하네.
-		v.pendingMgr.Remove(vtx.Hash)
-
 		// 4. [피드백] 이제 데이터가 DAG에 확실히 있으니 Fetcher에게 알려주세.
 		// Fetcher가 이 Vertex를 기다리고 있을 수 있으니 채널로 쏴주네.
-		// 비동기 처리를 위해 select를 사용하여 채널이 가득 찼을 때의 블로킹을 방지하세.
 		select {
 		case v.Fetcher.InboundResponse <- vtx:
 			// Fetcher가 깨어나서 GetMissingHashes를 하면 방금 넣은 vtx를 발견할 걸세.

@@ -28,6 +28,29 @@
        CalculateHash는 모든 필드를 결정론적으로 반영해야 하네.
 */
 
+/*
+   [TODO: Phase 2+ Strategic Evolution]
+
+   1. Multi-Hash Consensus (DAG Integrity):
+      - 현재는 쿼럼 투표 중 하나의 대표 해시(Representative Hash)만 QC에 담고 있네.
+      - 차후 2f+1개의 투표가 각기 다른 부모를 가리킬 경우, 모든 부모 해시의 집합(Set)이나
+        머클 루트를 QC에 포함하여 DAG의 인과적 정당성을 완벽히 증명해야 하네.
+
+   2. Safe Round Transition:
+      - nextRound 결정 시 (votedRound + 1)과 현재 노드의 Round 사이의 정합성을 검토하게나.
+      - 지연된 네트워크에서 '너무 과거'의 라운드로 제안되지 않도록
+        nextRound = max(votedRound + 1, currentRound) 등의 방어 로직 도입을 고려하게.
+
+   3. Signature Aggregation (Scalability):
+      - 현재의 map[int][]byte 구조는 노드가 늘어날수록 QC가 비대해지네.
+      - BLS Threshold Signature를 도입하여 수백 개의 서명을 고정 크기로 압축하고,
+        Bitmask로 서명자 목록을 최적화하여 네트워크 대역폭을 사수하게나.
+
+   4. Async Broadcast Pipe:
+      - 노드 확장성에 대비하여 Broadcaster에 비동기 큐나 고루틴 풀을 적용하고,
+        Gossip 프로토콜과의 연계로 전파 효율을 극대화할 준비를 하게나.
+*/
+
 package consensus
 
 import (
@@ -39,12 +62,12 @@ import (
 
 type Proposer struct {
 	mu            sync.Mutex
-	ctx           ProposerContext
+	ctx           types.ConsensusContext
 	QuorumManager QuorumPolicy
 	Broadcaster   network.Broadcaster
 }
 
-func NewProposer(ctx ProposerContext, qp QuorumPolicy, broadcaster network.Broadcaster) *Proposer {
+func NewProposer(ctx types.ConsensusContext, qp QuorumPolicy, broadcaster network.Broadcaster) *Proposer {
 	return &Proposer{
 		ctx:           ctx,
 		QuorumManager: qp,
@@ -153,7 +176,7 @@ func (p *Proposer) assembleQC(votes []*types.Message, round int) *types.QC {
 	      - 여기에 BLS 서명 결합(Aggregation)을 도입하여, 수백 개의 서명을 단 하나의
 	        고정 크기 서명으로 압축해야 하네. (Network BW 절감의 핵심!)
 
-	   3. 비트마스크(Bitmask) 최적화:
+	   3. Bitmask 최적화:
 	      - 누가 서명했는지 map으로 기록하는 대신, 비트마스크를 사용하여 QC 헤더 크기를
 	        획기적으로 줄이는 작업이 병행되어야 하네.
 	*/
