@@ -1,24 +1,25 @@
 // 누락된 Vertex를 이웃 노드에게 요청하여 DAG의 구멍을 메움.
 // TODO: [Fetcher Evolution & Integration]
 //
-// 1. 이벤트 기반 단계 전환 (Liveness):
+// 1. 이벤트 기반 단계 전환 (Liveness): [Phase 1]
 //    - 현재 Step 1~3은 time.Sleep 기반의 정적 타이밍에 의존함.
 //    - 의도: 데이터가 도착하는 즉시 다음 단계를 취소하거나 진행하는
 //      Event-driven 방식으로 전환하여 불필요한 지연(Latency)을 제거해야 함.
 //
-// 2. Pending 시스템과의 완벽한 결합 (Control):
+// 2. Pending 시스템과의 완벽한 결합 (Control): [Phase 1]
 //    - 현재 Fetcher가 스스로 재시도를 제어하고 있음.
 //    - 의도: 향후 Validator의 'startPendingCleanup' 루프가 재시도 타이밍을 결정하고,
 //      Fetcher는 단순 '요청 발송기' 역할만 수행하도록 로직을 이관해야 함.
 //
-// 3. Batch 요청의 세분화 관리 (Efficiency):
-//    - 현재 요청은 []hash(Batch) 단위이나, Pending 관리는 개별 Hash 단위임.
-//    - 의도: 일부 데이터만 누락된 경우, 전체 배치를 다시 요청하지 않고
-//      정말 없는 녀석만 골라내는 'stillMissing' 필터링을 매 단계마다 더 정교하게 수행할 것.
-//
-// 4. Peer 평판 시스템 연계 (Safety):
+// 3. Peer 평판 시스템 연계 (Safety): [Phase 2]
 //    - handlePanic 시점에 단순히 출력만 하는 것이 아니라,
 //      데이터를 주지 않는 노드(Suspect)에 대한 패널티 부여 로직을 연계해야 함.
+
+// TODO: [Critical Safety Fixes]
+// 1. [Phase 0] InboundResponse 채널을 Hash 기반의 분기 처리(Event-Multiplexing)로 개선할 것. (Global Wake-up 방지)
+// 2. [Phase 2] SuspectID가 응답하지 않을 경우 Step 2로 즉시 전이하는 Adaptive Timeout 고려.
+
+// Done: timer.Reset 호출 전 반드시 채널 비우기(Drain) 로직을 추가하여 레이스 컨디션 차단.
 
 package core
 
@@ -71,6 +72,13 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 
 			// 2. 단계에 맞는 대상에게 요청 발송
 			f.dispatchByStep(step, suspectID, currentMissing)
+			// [Safety Fix] Timer Reset 전 확실하게 채널을 비워두어야 하네
+			if !timer.Stop() {
+				select {
+				case <-timer.C: // 이미 만료되었다면 채널에서 비워주기
+				default: // 이미 비어있다면 대기 없이 통과
+				}
+			}
 			timer.Reset(f.getStepTimeout(step))
 
 		waitLoop:
