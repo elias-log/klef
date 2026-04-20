@@ -19,6 +19,8 @@ Rollback is an inherent feature of the system, not a flaw. It is the cost of ena
 Ultimately, this system is not designed to be the fastest blockchain in absolute terms. Instead, it is designed to scale with workload by exploiting transaction independence. It provides horizontal scalability, fault isolation, and partial liveness, ensuring that failures in one shard do not propagate across the entire network. Unlike traditional global-state systems, it aims to maintain performance even as system load increases.
 
 
+
+
 2. Implementation Waypoints
 
 This project cannot be implemented in a single step. Instead, it must evolve incrementally under the principle of introducing only one new source of complexity at a time. The ultimate goal is a system combining a data DAG with a sharded Jolteon-based consensus layer, but the initial focus must be on building a deterministic state machine without consensus or sharding.
