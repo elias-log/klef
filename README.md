@@ -29,7 +29,7 @@ This project cannot be implemented in a single step. Instead, it must evolve inc
 The goal is to construct a DAG with parent references and ensure it can be shared and reconstructed across nodes. At this stage, transactions carry no semantic meaning. Orphan handling must be implemented, buffering nodes whose parents have not yet arrived. The result is a consistent DAG structure across nodes given the same inputs.
 
 ### Phase 1: Single-node State Machine (Now)
-Introduce the object model and transaction execution logic. Each object has an ID and version, and transactions consume specific versions to produce new ones. Executing transactions in topological order must always yield the same state. The result is a fully deterministic execution environment on a single node.
+Introduce the object model and transaction execution logic. Each object has an ID and version, and transactions consume specific versions to produce new ones. Executing transactions in canonical order must always yield the same state. The result is a fully deterministic execution environment on a single node.
 
 ### Phase 2: Deterministic Conflict Resolution (Tie-breaking)
 Define rules for resolving conflicts when multiple transactions attempt to consume the same object version. For example, selecting the transaction with the lowest hash. This rule becomes the foundation for consistency across nodes. The result is that identical inputs always lead to identical outcomes, regardless of execution order.
