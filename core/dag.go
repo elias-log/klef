@@ -43,8 +43,7 @@ type DAG struct {
 
 // NewDAG: DAG와 버퍼를 초기화해서 반환하네.
 func NewDAG(fetcher SyncFetcher, slasher *Slasher, cfg *config.Config) *DAG {
-	// Orphanage도 Validator가 가진 Slasher를 공유해야 하네.
-	orphanage := NewOrphanage(cfg.DAG.OrphanCapacity, slasher)
+	orphanage := NewOrphanage(cfg.DAG.OrphanCapacity)
 
 	return &DAG{
 		Vertices:   make(map[string]*types.Vertex),

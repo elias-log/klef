@@ -34,26 +34,20 @@ import (
 	"sync"
 )
 
-type Demeritter interface {
-	AddDemerit(author int, amount int, vtx *types.Vertex, reason string)
-}
-
 type Orphanage struct {
 	mu              sync.Mutex
 	lostParents     map[string][]*types.Vertex // lostParent[부모 해시] = [기다리는 자식들]
 	lostParentCount map[string]int             // lostParentCount[자식 해시] = 부족한 부모 수
 	orphans         map[string]*types.Vertex   // 고아 목록
 	capacity        int                        // 최대 잃어버린 부모 수 제한
-	slasher         Demeritter
 }
 
-func NewOrphanage(limit int, s Demeritter) *Orphanage {
+func NewOrphanage(limit int) *Orphanage {
 	return &Orphanage{
 		lostParents:     make(map[string][]*types.Vertex),
 		lostParentCount: make(map[string]int),
 		orphans:         make(map[string]*types.Vertex),
 		capacity:        limit,
-		slasher:         s,
 	}
 }
 
