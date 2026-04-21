@@ -24,6 +24,8 @@ func CreateDummyVertex(author int, round int, parents []string, signer *Ed25519S
 		Payload:   [][]byte{[]byte("test_transaction")},
 	}
 
+	vtx.Normalize()
+
 	// 1. 먼저 해시를 계산하네.
 	vtx.Hash = vtx.CalculateHash()
 
@@ -33,6 +35,23 @@ func CreateDummyVertex(author int, round int, parents []string, signer *Ed25519S
 		vtx.Signature = []byte(sig)
 	}
 
+	return vtx
+}
+
+func CreateByzantineVertex(author int, round int, parents []string, signer *Ed25519Signer) *types.Vertex {
+	vtx := &types.Vertex{
+		Author:    author,
+		Round:     round,
+		Parents:   parents, // 정렬 안 된 그대로 넣음!
+		Timestamp: time.Now().UnixMilli(),
+	}
+	// Normalize()를 생략하고 바로 해시를 뜸! (이게 바로 의도적인 규칙 위반)
+	vtx.Hash = vtx.CalculateHash()
+
+	if signer != nil {
+		sig := signer.Sign([]byte(vtx.Hash))
+		vtx.Signature = []byte(sig)
+	}
 	return vtx
 }
 
@@ -49,7 +68,6 @@ func InjectFetchResponse(v *Validator, vertices []*types.Vertex) {
 // 1. generateComplexDAG: 복잡하게 꼬인 테스트용 Vertex 세트를 생성하네.
 func generateComplexDAG(count int) []*types.Vertex {
 	vertices := make([]*types.Vertex, 0, count)
-	hashes := make([]string, 0, count)
 
 	// 1. 제네시스 정점
 	genesis := &types.Vertex{
@@ -58,33 +76,32 @@ func generateComplexDAG(count int) []*types.Vertex {
 		Parents:   []string{}, // 부모 없음
 		Timestamp: time.Now().UnixNano(),
 	}
+	genesis.Normalize() // 습관적으로!
 	genesis.Hash = genesis.CalculateHash()
-
 	vertices = append(vertices, genesis)
-	hashes = append(hashes, genesis.Hash)
 
 	for i := 1; i < count; i++ {
-		// 2. 인과관계에 따른 부모 선택
-		available := len(hashes)
+		// [수정] 이미 완전히 생성되어 슬라이스에 들어간 vertex 중에서만 부모를 고르네.
 		numParents := rand.Intn(3) + 1
-		if numParents > available {
-			numParents = available // 가질 수 있는 만큼만
+		if numParents > len(vertices) {
+			numParents = len(vertices)
 		}
 
-		parents := make([]string, 0, numParents)
+		var parents []string
 		parentSet := make(map[string]struct{}) // 중복 부모 방지를 위한 맵
 
-		attempts := 0 // 무한 루프 방지용 카운터
-		for len(parents) < numParents && attempts < 100 {
-			attempts++
-			pHash := hashes[rand.Intn(len(hashes))]
-			if _, exists := parentSet[pHash]; !exists {
-				parentSet[pHash] = struct{}{}
-				parents = append(parents, pHash)
+		// 랜덤하게 섞인 인덱스에서 부모 선택
+		for len(parents) < numParents {
+			// 이미 생성된 vertices 중에서 랜덤하게 부모 선택
+			p := vertices[rand.Intn(len(vertices))]
+
+			if _, exists := parentSet[p.Hash]; !exists {
+				parentSet[p.Hash] = struct{}{}
+				parents = append(parents, p.Hash)
 			}
 		}
 
-		// 부모 해시들도 정렬해주면 더 결정론적이겠지?
+		// 규격 준수
 		sort.Strings(parents)
 
 		vtx := &types.Vertex{
@@ -95,10 +112,10 @@ func generateComplexDAG(count int) []*types.Vertex {
 			Payload:   [][]byte{[]byte(fmt.Sprintf("tx-data-%d", i))},
 		}
 
+		vtx.Normalize()
 		vtx.Hash = vtx.CalculateHash()
 
 		vertices = append(vertices, vtx)
-		hashes = append(hashes, vtx.Hash)
 	}
 	return vertices
 }

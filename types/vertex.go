@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"sort"
 )
 
@@ -172,19 +173,22 @@ func deduplicateAndSort(in []string) []string {
 
 // Canonical Parent Ordering is part of protocol validity.
 // Any deviation is treated as Byzantine behavior.
-func IsMalformed(parents []string) bool {
+func CheckMalformed(parents []string) (bool, string) {
 	if len(parents) <= 1 {
-		return false
+		return false, ""
 	}
 
 	for i := 0; i < len(parents)-1; i++ {
-		// 1. 정렬 확인 (오름차순이 아니면 에러)
-		if parents[i] >= parents[i+1] {
-			// TODO: Slasher에 연계
-			return true // 중복이거나 정렬 오류
+		// 1. 중복 체크
+		if parents[i] == parents[i+1] {
+			return true, fmt.Sprintf("Duplicate parent hash detected: %s", parents[i])
+		}
+		// 2. 정렬 체크 (사전순 위반)
+		if parents[i] > parents[i+1] {
+			return true, fmt.Sprintf("Unsorted parents: %s comes before %s", parents[i], parents[i+1])
 		}
 	}
-	return false
+	return false, ""
 }
 
 // HasDuplicate: 슬라이스 내에 중복된 해시가 있는지 검사하네. (검증용)

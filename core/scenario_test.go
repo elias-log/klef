@@ -407,8 +407,47 @@ func TestRandomizedDeliveryConvergence(t *testing.T) {
 
 	wg.Wait() // 모든 난리가 끝날 때까지 대기
 
-	// 이 난리통을 겪고도 A와 B가 같아야 진짜 결정론적일세.
+	// A와 B가 같아야 진짜 결정론적일세.
 	if !compareDAGFull(nodeA.DAG, nodeB.DAG) {
 		t.Fatal("❌ DAG divergence detected! 병렬 주입 환경에서 결과가 틀어짐세.")
+	}
+}
+
+func TestByzantineResilience(t *testing.T) {
+	cfg := config.DefaultConfig()
+	signer, _ := NewEd25519Signer()
+	v := NewValidator(0, cfg, signer)
+
+	// 시나리오 A: 부모 정렬을 뒤섞은 빌런 (Malformed)
+	v1 := CreateByzantineVertex(1, 1, []string{}, signer)
+	v2 := CreateByzantineVertex(1, 1, []string{}, signer)
+
+	// 강제로 엉망진창 정렬 (v2, v1 순서)
+	malformedParents := []string{v2.Hash, v1.Hash}
+	if v1.Hash < v2.Hash { // v1이 작다면 정렬 위반 상태로 만듦
+		malformedParents = []string{v2.Hash, v1.Hash}
+	} else {
+		malformedParents = []string{v1.Hash, v2.Hash}
+	}
+
+	vByz := CreateByzantineVertex(1, 1, malformedParents, signer) // 생성 시 정렬 위반!
+
+	// 실행
+	v.DAG.AddVertex(vByz, 1)
+
+	// 검증: 슬래셔에 보고되었는가?
+	if v.Slasher.penaltyTable[1] == 0 {
+		t.Fatal("❌ 비잔틴 노드(정렬 위반)를 잡지 못했네!")
+	}
+
+	// 시나리오 B: 존재하지 않는 부모를 둔 고아 (Memory Attack)
+	for i := 0; i < cfg.DAG.OrphanCapacity+10; i++ {
+		ghostVtx := CreateDummyVertex(2, 5, []string{"ghost_hash_" + fmt.Sprint(i)}, signer)
+		v.DAG.AddVertex(ghostVtx, 5)
+	}
+
+	// 검증: 고아원이 터지지 않고 용량을 유지하는가?
+	if v.DAG.Buffer.Size() > cfg.DAG.OrphanCapacity {
+		t.Errorf("❌ 고아원이 수용량을 초과했네! 축출 로직 확인 필요: %d", v.DAG.Buffer.Size())
 	}
 }

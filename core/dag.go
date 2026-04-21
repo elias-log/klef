@@ -42,8 +42,8 @@ type DAG struct {
 }
 
 // NewDAG: DAG와 버퍼를 초기화해서 반환하네.
-func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
-	slasher := NewSlasher(cfg)
+func NewDAG(fetcher SyncFetcher, slasher *Slasher, cfg *config.Config) *DAG {
+	// Orphanage도 Validator가 가진 Slasher를 공유해야 하네.
 	orphanage := NewOrphanage(cfg.DAG.OrphanCapacity, slasher)
 
 	return &DAG{
@@ -60,34 +60,44 @@ func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
 // DAG.mu  >  Orphanage.mu
 func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
-	// 1. 원본 기준 해시 검증
-	calcHash := vtx.CalculateHash()
-	if vtx.Hash != calcHash {
-		fmt.Printf("[ERROR] DAG: 해시 불일치!: %s\n", vtx.Hash)
-		// TODO: reject and slash (단순 전송오류일수도 있나? 검토 필요)
-		return
-	}
-
-	// 2. 원본을 정렬하고 중복이 제거된 상태로 변경
-	if types.IsMalformed(vtx.Parents) {
-		fmt.Printf("[CRITICAL] 비잔틴 노드 %d 확인: 해시가 맞지만, 형식오류데이터 고의 전송\n", vtx.Author)
-		d.Slasher.AddDemerit(
-			vtx.Author,
-			d.Config.Security.MalformedVertexPenalty,
-			vtx,
-			"Malformed Parents: Unsorted or Duplicated",
-		)
-		return
-	}
-
-	// 3. 중복 및 부모 확인
+	// 0. 빠른 중복 체크
 	d.mu.RLock()
 	_, exists := d.Vertices[vtx.Hash]
-	missing := d.getMissingHashesLocked(vtx.Parents)
 	d.mu.RUnlock()
 	if exists {
 		return
 	}
+
+	// 1. 원본 기준 해시 검증
+	calcHash := vtx.CalculateHash()
+	if vtx.Hash != calcHash {
+		fmt.Printf("[ERROR] DAG: 해시 불일치!: %s\n", vtx.Hash)
+		// TODO: reject and slash (바로 슬래시하지 않고 다시 물어보는 로직 추가 예정)
+		return
+	}
+
+	// 2. 원본을 정렬하고 중복이 제거된 상태로 변경
+	if isMalformed, reason := types.CheckMalformed(vtx.Parents); isMalformed {
+		fmt.Printf("[CRITICAL] 비잔틴 노드 %d 확인: 해시가 맞지만, 형식오류데이터 고의 전송, reason: %s\n", vtx.Author, reason)
+		d.Slasher.AddDemerit(
+			vtx.Author,
+			d.Config.Security.MalformedVertexPenalty,
+			vtx,
+			reason,
+		)
+		return
+	}
+
+	// 3. 부모 확인
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// 중복 재검증(concurrency)
+	if _, exists := d.Vertices[vtx.Hash]; exists {
+		return
+	}
+
+	missing := d.getMissingHashesLocked(vtx.Parents)
 
 	// 4. 부모가 하나라도 없다면 orphanage로!
 	if len(missing) > 0 {
@@ -105,40 +115,47 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 	// TODO: validateVertex(vtx)
 
 	// 5. 정식 삽입
-	d.processInsertion(vtx)
+	d.processInsertionLocked(vtx)
 }
 
 // processInsertion:
-func (d *DAG) processInsertion(initialVtx *types.Vertex) {
+func (d *DAG) processInsertionLocked(initialVtx *types.Vertex) {
 	worklist := []*types.Vertex{initialVtx}
+	affectedRounds := make(map[int]bool) // 정렬이 필요한 라운드 추적
 
 	for len(worklist) > 0 {
 		vtx := worklist[0]
 		worklist = worklist[1:]
 
-		d.mu.Lock()
 		if _, exists := d.Vertices[vtx.Hash]; exists {
-			d.mu.Unlock()
 			continue
 		}
 
 		// 데이터 기록
 		d.Vertices[vtx.Hash] = vtx
 		d.RoundIndex[vtx.Round] = append(d.RoundIndex[vtx.Round], vtx.Hash)
+		affectedRounds[vtx.Round] = true // Lazy Sorting
 
-		// [결정적 순서 보장] 해시값 기준 오름차순 정렬
-		sort.Strings(d.RoundIndex[vtx.Round])
-		// TODO Phase1: 삽입 시마다 정렬하는 방식은 라운드당 Vertex가 많아질 경우 성능 병목이 될 수 있음.
-		// 향후 binary search를 이용한 Sorted Insertion으로 최적화 검토 필요.
-
-		// 고아 해방: Orphanage 내부의 Lock은 DAG Lock의 하위 계급이므로 안전하네.
 		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
-		d.mu.Unlock()
-
-		fmt.Printf("[DEBUG] DAG: Vertex %s 삽입 성공 (Round %d)\n", vtx.Hash[:8], vtx.Round)
 		if len(readyChildren) > 0 {
+			// 결정론적 순서를 위해 해방된 자식들 정렬
+			sort.Slice(readyChildren, func(i, j int) bool {
+				return readyChildren[i].Hash < readyChildren[j].Hash
+			})
 			worklist = append(worklist, readyChildren...)
 		}
+
+		fmt.Printf("[DEBUG] DAG: Vertex %s 삽입 성공 (Round %d)\n", vtx.Hash[:8], vtx.Round)
+	}
+	// [최적화] 영향받은 라운드들만 딱 한 번씩 정렬하세!
+	rounds := make([]int, 0, len(affectedRounds))
+	for r := range affectedRounds {
+		rounds = append(rounds, r)
+	}
+	sort.Ints(rounds)
+
+	for _, r := range rounds {
+		sort.Strings(d.RoundIndex[r])
 	}
 }
 

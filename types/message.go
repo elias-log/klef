@@ -3,12 +3,12 @@ package types
 type MessageType uint8
 
 const (
-	MsgVertex MessageType = iota
-	MsgVote
-	MsgFetchReq
-	MsgFetchRes
-	MsgEvidence
-	MsgInvalidPayload
+	MsgVertex         MessageType = iota // 0
+	MsgVote                              // 1
+	MsgFetchReq                          // 2
+	MsgFetchRes                          // 3
+	MsgEvidence                          // 4: 이중 투표 등 일반 고발
+	MsgInvalidPayload                    // 5: 정렬/중복 위반 등 데이터 오류
 )
 
 func (t MessageType) String() string {
@@ -95,8 +95,8 @@ func (e *Evidence) IsValid() bool {
 
 	// Case 2: 페이로드 위반 (중복 부모 등 - Proof1만으로 증명 가능!)
 	if e.Type == MsgInvalidPayload {
-		// 여기서는 Proof1 내부의 Parents 리스트에 중복이 있는지 검사하면 끝이라네!
-		return HasDuplicate(e.Proof1.Parents)
+		isMalformed, _ := CheckMalformed(e.Proof1.Parents)
+		return isMalformed
 	}
 
 	return false

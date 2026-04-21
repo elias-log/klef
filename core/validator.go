@@ -116,7 +116,7 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 		InboundResponse: make(chan *types.Vertex, cfg.Resource.FetcherChannelSize),
 		Validator:       v,
 	}
-	v.DAG = NewDAG(v.Fetcher, cfg)
+	v.DAG = NewDAG(v.Fetcher, v.Slasher, cfg)
 
 	v.registerValidators()
 	return v
