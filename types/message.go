@@ -8,6 +8,7 @@ const (
 	MsgFetchReq
 	MsgFetchRes
 	MsgEvidence
+	MsgInvalidPayload
 )
 
 func (t MessageType) String() string {
@@ -22,6 +23,8 @@ func (t MessageType) String() string {
 		return "FETCH_RES"
 	case MsgEvidence:
 		return "EVIDENCE"
+	case MsgInvalidPayload:
+		return "INVALID_PAYLOAD"
 	default:
 		return "UNKNOWN"
 	}
@@ -65,22 +68,36 @@ type Evidence struct {
 	Proof2   *Vertex     // 두 번째 물증 (예: 같은 라운드에 생성한 또 다른 Vertex)
 
 	// 이 증거를 처음 발견하고 서명한 신고자 정보
-	ReporterID int
-	Timestamp  int64 // 신고 시각 (UNIX)
+	ReporterID  int
+	Timestamp   int64  // 신고 시각 (UNIX)
+	Description string // "왜 고발했는가"에 대한 상세 이유
 }
 
 // IsValid: 증거가 논리적으로 타당한지 스스로 검사하네.
 func (e *Evidence) IsValid() bool {
-	// 1. 범인이 동일인물인가?
-	if e.Proof1.Author != e.Proof2.Author || e.Proof1.Author != e.TargetID {
+	// 물증1이 없으면 재판 자체가 안 되지!
+	if e.Proof1 == nil {
+		return false
+	}
+	if e.Proof1.Author != e.TargetID {
 		return false
 	}
 
-	// 2. 이중 투표(Equivocation)인 경우: 라운드는 같은데 해시가 다른가?
-	if e.Proof1.Round == e.Proof2.Round && e.Proof1.Hash != e.Proof2.Hash {
-		return true
+	// Case 1: 이중 투표 (Proof1과 Proof2가 둘 다 있을 때)
+	if e.Proof2 != nil {
+		if e.Proof1.Author != e.Proof2.Author {
+			return false
+		}
+		if e.Proof1.Round == e.Proof2.Round && e.Proof1.Hash != e.Proof2.Hash {
+			return true
+		}
 	}
 
-	// 다른 죄목(라운드 점프 등) 검증 로직을 추가할 예정이네.
+	// Case 2: 페이로드 위반 (중복 부모 등 - Proof1만으로 증명 가능!)
+	if e.Type == MsgInvalidPayload {
+		// 여기서는 Proof1 내부의 Parents 리스트에 중복이 있는지 검사하면 끝이라네!
+		return HasDuplicate(e.Proof1.Parents)
+	}
+
 	return false
 }

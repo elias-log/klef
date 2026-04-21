@@ -9,14 +9,15 @@ import (
 	"arachnet-bft/types"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Slasher: Arachnet의 기강을 잡는 엄격한 판사님일세.
 type Slasher struct {
-	mu sync.RWMutex
-	// 이제 types.Evidence 구조체를 사용하여 통일된 고발장을 관리하네.
+	mu           sync.RWMutex
 	evidences    map[int][]types.Evidence // Validator ID -> 증거 목록
 	penaltyTable map[int]int              // Validator ID -> 벌점
+	processedEv  map[string]bool          // [추가] 이미 판결이 끝난 증거물(Vertex Hash) 목록
 	Config       *config.Config           // 판사님의 법전일세!
 }
 
@@ -24,6 +25,7 @@ func NewSlasher(cfg *config.Config) *Slasher {
 	return &Slasher{
 		evidences:    make(map[int][]types.Evidence),
 		penaltyTable: make(map[int]int),
+		processedEv:  make(map[string]bool),
 		Config:       cfg,
 	}
 }
@@ -80,4 +82,34 @@ func (s *Slasher) IsSlashed(validatorID int) bool {
 
 	// 벌점이 임계치를 넘으면 이 노드의 말은 아무도 안 믿게 될 걸세.
 	return s.penaltyTable[validatorID] >= s.Config.Security.SlashThreshold
+}
+
+// AddDemerit: [ISlasher 인터페이스 구현]
+// Orphanage 등 내부 모듈에서 가벼운 위반 사항을 보고할 때 사용하네.
+func (s *Slasher) AddDemerit(author int, amount int, vtx *types.Vertex, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. 일사부재리 및 처벌 임계치 체크
+	if s.penaltyTable[author] >= s.Config.Security.SlashThreshold || s.processedEv[vtx.Hash] {
+		return
+	}
+
+	// 2. 증거물 마킹
+	s.processedEv[vtx.Hash] = true
+
+	// 3. 고발장 생성 및 벌점 부과
+	evidence := types.Evidence{
+		TargetID:    author,
+		Type:        types.MsgInvalidPayload,
+		Proof1:      vtx,
+		ReporterID:  s.Config.NodeID,
+		Description: reason,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	s.penaltyTable[author] += amount
+	s.evidences[author] = append(s.evidences[author], evidence)
+
+	fmt.Printf("[SLASHER] Validator %d 벌점 %d 부과! (Reason: %s, Hash: %s)\n", author, amount, reason, vtx.Hash)
 }

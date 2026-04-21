@@ -67,17 +67,22 @@ type DAG struct {
 	mu         sync.RWMutex
 	Vertices   map[string]*types.Vertex //vertex hash -> vertex
 	RoundIndex map[int][]string
-	Buffer     *OrphanBuffer
+	Buffer     *Orphanage
+	Slasher    *Slasher
 	Fetcher    SyncFetcher
 	Config     *config.Config
 }
 
 // NewDAG: DAG와 버퍼를 초기화해서 반환하네.
 func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
+	slasher := NewSlasher(cfg)
+	orphanage := NewOrphanage(cfg.DAG.OrphanCapacity, slasher)
+
 	return &DAG{
 		Vertices:   make(map[string]*types.Vertex),
 		RoundIndex: make(map[int][]string),
-		Buffer:     NewOrphanBuffer(cfg.DAG.OrphanCapacity),
+		Buffer:     orphanage,
+		Slasher:    slasher,
 		Fetcher:    fetcher,
 		Config:     cfg,
 	}
@@ -195,4 +200,41 @@ func (d *DAG) GetVotesForVertices(vertices []*types.Vertex) []*types.Message {
 	// 지금은 스켈레톤이니 빈 값을 주지만,
 	// 나중에 d.VoteIndex[vtx.Hash] 같은 곳에서 꺼내오게 될 걸세.
 	return []*types.Message{}
+}
+
+// Size: 현재 DAG에 정식으로 삽입된 Vertex의 개수를 반환하네.
+func (d *DAG) Size() int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return len(d.Vertices)
+}
+
+// GetTips: 현재 DAG에서 자식이 없는 Vertex들을 반환하네.
+func (d *DAG) GetTips() []*types.Vertex {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	if len(d.Vertices) == 0 {
+		// 여기서 제네시스 정점을 생성해서 주거나,
+		// 혹은 명시적으로 nil을 주어 상위 계층이 알게 해야 하네.
+		return nil
+	}
+
+	// 1. 모든 부모 해시를 수집하네.
+	hasChild := make(map[string]bool)
+	for _, vtx := range d.Vertices {
+		for _, parentHash := range vtx.Parents {
+			hasChild[parentHash] = true
+		}
+	}
+
+	// 2. 부모로 한 번도 지목되지 않은 녀석들이 Tips라네!
+	var tips []*types.Vertex
+	for hash, vtx := range d.Vertices {
+		if !hasChild[hash] {
+			tips = append(tips, vtx)
+		}
+	}
+
+	return tips
 }

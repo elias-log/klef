@@ -81,6 +81,8 @@ type Validator struct {
 }
 
 func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
+	ctx, cancel := context.WithCancel(context.Background()) // [fix]
+
 	// 1. 기본 필드 및 맵/채널 초기화
 	v := &Validator{
 		ID:                id,
@@ -88,6 +90,11 @@ func NewValidator(id int, cfg *config.Config, signer types.Signer) *Validator {
 		Signer:            signer,
 		PublicKey:         signer.GetPublicKey(),
 		lastProposedRound: -1,
+
+		// [fix]
+		ctx:    ctx,
+		cancel: cancel,
+
 		Peers:             make(map[int]bool),
 		PeerRounds:        make(map[int]int),
 		pendingMgr:        NewPendingManager(cfg),

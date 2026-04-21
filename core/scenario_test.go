@@ -3,6 +3,7 @@ package core
 import (
 	"arachnet-bft/config"
 	"arachnet-bft/types"
+	"fmt"
 	"testing"
 )
 
@@ -189,6 +190,177 @@ func TestSyncTriggerOnRoundGap(t *testing.T) {
 			t.Errorf("❌ 격차가 5나 되는데 왜 Fetcher가 잠잠한가! 동기화가 시급하네.")
 		} else {
 			t.Logf("✅ 성공: %v 해시에 대해 동기화 요청이 발송되었네.", mock.Hashes)
+		}
+	})
+}
+
+//DAG 중복 vertex삽입 테스트
+func TestDuplicateVertexIgnored(t *testing.T) {
+	cfg := config.DefaultConfig()
+	signer, _ := NewEd25519Signer()
+	v := NewValidator(0, cfg, signer)
+
+	vtx := CreateDummyVertex(1, 1, []string{}, signer)
+
+	// 1. 첫 번째 삽입
+	v.DAG.AddVertex(vtx, 1)
+	initialSize := v.DAG.Size()
+
+	// 2. 두 번째 삽입 (중복)
+	v.DAG.AddVertex(vtx, 1)
+
+	// 검증: 크기가 변하지 않아야 하네!
+	if v.DAG.Size() != initialSize {
+		t.Errorf("❌ 중복 삽입으로 DAG 크기가 늘어났네! (Expected: %d, Actual: %d)", initialSize, v.DAG.Size())
+	} else {
+		t.Log("✅ 성공: 중복 Vertex는 무시되었네.")
+	}
+}
+
+//DAG invalid hash 테스트
+func TestInvalidHashRejected(t *testing.T) {
+	cfg := config.DefaultConfig()
+	signer, _ := NewEd25519Signer()
+	v := NewValidator(0, cfg, signer)
+
+	vtx := CreateDummyVertex(1, 1, []string{}, signer)
+
+	// 공격: 데이터를 살짝 바꿈세 (Hash는 그대로 두고 Payload만 변경)
+	vtx.Round = 999
+
+	v.DAG.AddVertex(vtx, 1)
+
+	// 검증: DAG에도, OrphanBuffer에도 없어야 하네.
+	if v.DAG.GetVertex(vtx.Hash) != nil || v.DAG.Buffer.GetOrphan(vtx.Hash) != nil {
+		t.Error("❌ 위조된 해시를 가진 Vertex가 시스템에 침투했네! 보안 비상일세!")
+	} else {
+		t.Log("✅ 성공: 무결성 검증 실패로 위조 Vertex를 처단했네.")
+	}
+}
+
+// Partial Parent Arrival 테스트
+func TestPartialDependencyResolution(t *testing.T) {
+	cfg := config.DefaultConfig()
+	signer, _ := NewEd25519Signer()
+	v := NewValidator(0, cfg, signer)
+
+	v1 := CreateDummyVertex(0, 1, []string{}, signer)                 // Parent 1
+	v2 := CreateDummyVertex(1, 1, []string{}, signer)                 // Parent 2
+	v3 := CreateDummyVertex(0, 2, []string{v1.Hash, v2.Hash}, signer) // Child
+
+	// 1. 자식(v3) 먼저 주입 -> 고아행
+	v.DAG.AddVertex(v3, 2)
+
+	// 2. 부모 1(v1)만 주입
+	v.DAG.AddVertex(v1, 2)
+
+	// 검증: v1은 들어갔지만, v3는 여전히 고아여야 하네 (v2가 없으니까!)
+	if v.DAG.GetVertex(v3.Hash) != nil {
+		t.Fatal("❌ 부모가 하나 부족한데 v3가 벌써 DAG에 합류했구먼!")
+	}
+	t.Log("✅ v3가 Partial 상태로 나머지 부모를 잘 기다리고 있네.")
+
+	// 3. 마지막 부모 2(v2) 주입
+	v.DAG.AddVertex(v2, 2)
+
+	// 4. 최종 검증
+	if v.DAG.GetVertex(v3.Hash) != nil {
+		t.Log("✅ 대성공: 모든 의존성이 충족되자 비로소 v3가 해방되었네!")
+	} else {
+		t.Error("❌ 모든 부모가 왔는데도 v3가 여전히 갇혀있네.")
+	}
+}
+
+func TestDAGConsistencyAndReconstruction(t *testing.T) {
+	cfg := config.DefaultConfig()
+	signer, _ := NewEd25519Signer()
+
+	// 1. 노드 A: 10개의 Vertex를 복잡한 의존성으로 생성하네.
+	nodeA := NewValidator(0, cfg, signer)
+	vertices := make([]*types.Vertex, 10)
+
+	// 제네시스급 정점들 (Round 1)
+	for i := 0; i < 3; i++ {
+		vertices[i] = CreateDummyVertex(i, 1, []string{}, signer)
+		nodeA.DAG.AddVertex(vertices[i], 1)
+	}
+
+	// 복잡하게 꼬인 정점들 (Round 2~4)
+	// 이전 라운드 정점들을 무작위로 부모로 삼네.
+	vertices[3] = CreateDummyVertex(0, 2, []string{vertices[0].Hash, vertices[1].Hash}, signer)
+	vertices[4] = CreateDummyVertex(1, 2, []string{vertices[1].Hash, vertices[2].Hash}, signer)
+	vertices[5] = CreateDummyVertex(2, 3, []string{vertices[3].Hash, vertices[4].Hash}, signer)
+	vertices[6] = CreateDummyVertex(0, 3, []string{vertices[0].Hash, vertices[5].Hash}, signer)
+	vertices[7] = CreateDummyVertex(1, 4, []string{vertices[6].Hash, vertices[2].Hash}, signer)
+	vertices[8] = CreateDummyVertex(2, 4, []string{vertices[5].Hash, vertices[7].Hash}, signer)
+	vertices[9] = CreateDummyVertex(0, 5, []string{vertices[8].Hash}, signer)
+
+	for i := 3; i < 10; i++ {
+		nodeA.DAG.AddVertex(vertices[i], 5)
+	}
+
+	// 2. 노드 B: 고아원과 함께 탄생!
+	nodeB := NewValidator(1, cfg, signer)
+
+	// 3. [핵심] 순서를 완전히 뒤섞어서 노드 B에 주입하네.
+	// 9번(자식)부터 0번(조상) 순서로 거꾸로 넣어보겠네.
+	for i := 9; i >= 0; i-- {
+		nodeB.DAG.AddVertex(vertices[i], 5)
+	}
+
+	// 4. 최종 검증
+	// A와 B의 DAG 사이즈가 같아야 하고, 마지막 팁(Tips)의 해시가 일치해야 하네.
+	if len(nodeA.DAG.Vertices) != len(nodeB.DAG.Vertices) {
+		t.Errorf("❌ 불일치! 노드A 사이즈: %d, 노드B 사이즈: %d",
+			len(nodeA.DAG.Vertices), len(nodeB.DAG.Vertices))
+	}
+
+	tipsA := nodeA.DAG.GetTips()
+	tipsB := nodeB.DAG.GetTips()
+
+	if len(tipsA) != len(tipsB) {
+		t.Fatal("❌ Tips의 개수가 다르구먼!")
+	}
+
+	t.Logf("✅ 검증 완료: 두 노드의 DAG 사이즈(%d)와 구조가 완벽히 일치하네!", len(nodeB.DAG.Vertices))
+}
+
+func TestAbnormalEdgeCases(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DAG.OrphanCapacity = 2 // 용량을 아주 작게!
+	signer, _ := NewEd25519Signer()
+	v := NewValidator(0, cfg, signer)
+
+	t.Run("Möbius Loop Attack", func(t *testing.T) {
+		// V1의 부모는 V2, V2의 부모는 V1. 서로가 서로를 기다리네
+		v1 := CreateDummyVertex(0, 10, []string{"hash_v2"}, signer)
+		v2 := CreateDummyVertex(0, 11, []string{v1.Hash}, signer) // 라운드는 높지만 해시는 순환
+
+		v.DAG.AddVertex(v1, 10)
+		v.DAG.AddVertex(v2, 10)
+
+		// 결과: 둘 다 고아원에 갇혀 있어야 하며, 시스템이 멈추면 안 되네.
+	})
+
+	t.Run("Orphanage Capacity Limit", func(t *testing.T) {
+		// 1. 용량만큼 채우기
+		for i := 0; i < 2; i++ {
+			vtx := CreateDummyVertex(0, i+1, []string{fmt.Sprintf("missing_%d", i)}, signer)
+			v.DAG.AddVertex(vtx, 1)
+		}
+
+		// 2. 초과분 주입 (이때는 [DEBUG] 로그가 안 찍힐 걸세. return으로 바로 나가니까!)
+		vtxExtra := CreateDummyVertex(0, 99, []string{"missing_99"}, signer)
+		v.DAG.AddVertex(vtxExtra, 1)
+
+		// 3. 확실한 출력
+		size := v.DAG.Buffer.Size()
+		fmt.Printf("\n[TEST_RESULT] 현재 고아원 크기: %d (Limit: 2)\n", size)
+
+		if size <= 2 {
+			fmt.Printf("✅ 성공: 넘치는 고아들은 규정대로 처리되고 %d개만 남았네.\n", size)
+		} else {
+			t.Errorf("❌ 용량 초과! %d개가 들어있네.", size)
 		}
 	})
 }

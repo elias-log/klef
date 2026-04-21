@@ -138,3 +138,15 @@ func (v *Vertex) CalculateHash() string {
 	hash := sha256.Sum256(buf.Bytes())
 	return hex.EncodeToString(hash[:])
 }
+
+// HasDuplicate: 슬라이스 내에 중복된 해시가 있는지 검사하네.
+func HasDuplicate(elements []string) bool {
+	encountered := make(map[string]struct{})
+	for _, v := range elements {
+		if _, ok := encountered[v]; ok {
+			return true
+		}
+		encountered[v] = struct{}{}
+	}
+	return false
+}

@@ -20,55 +20,98 @@ package core
 
 import (
 	"arachnet-bft/types"
+	"fmt"
 	"sync"
 )
 
-type OrphanBuffer struct {
-	mu           sync.Mutex
-	waitingFor   map[string][]*types.Vertex // 부모 해시 -> 기다리는 자식들
-	missingCount map[string]int             // 자식 해시 -> 부족한 부모 수
-	orphans      map[string]*types.Vertex   // 고아 목록
-	capacity     int                        // [보안] 최대 보관 개수 제한
+type Demeritter interface {
+	AddDemerit(author int, amount int, vtx *types.Vertex, reason string)
 }
 
-func NewOrphanBuffer(limit int) *OrphanBuffer {
-	return &OrphanBuffer{
-		waitingFor:   make(map[string][]*types.Vertex),
-		missingCount: make(map[string]int),
-		orphans:      make(map[string]*types.Vertex),
-		capacity:     limit,
+type Orphanage struct {
+	mu              sync.Mutex
+	lostParents     map[string][]*types.Vertex // lostParent[부모 해시] = [기다리는 자식들]
+	lostParentCount map[string]int             // lostParentCount[자식 해시] = 부족한 부모 수
+	orphans         map[string]*types.Vertex   // 고아 목록
+	capacity        int                        // 최대 잃어버린 부모 수 제한
+	slasher         Demeritter
+}
+
+func NewOrphanage(limit int, s Demeritter) *Orphanage {
+	return &Orphanage{
+		lostParents:     make(map[string][]*types.Vertex),
+		lostParentCount: make(map[string]int),
+		orphans:         make(map[string]*types.Vertex),
+		capacity:        limit,
+		slasher:         s,
 	}
 }
 
 // AddOrphan: 부모가 부족한 Vertex (orphan)를 대기실에 등록하네.
-func (b *OrphanBuffer) AddOrphan(vtx *types.Vertex, missingHashes []string) {
+func (b *Orphanage) AddOrphan(vtx *types.Vertex, missingParents []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// 1. [보안] 용량 초과 확인
-	if len(b.missingCount) >= b.capacity {
+	// 1. 고아원 용량 초과 확인
+	if len(b.lostParentCount) >= b.capacity {
 		// 가장 오래된 녀석을 지우거나, 새로운 요청을 거절해야 하네.
 		return
 	}
 
-	// 2. [논리] 이미 대기 중인 녀석이면 중복 등록 방지
-	if _, exists := b.missingCount[vtx.Hash]; exists {
+	// 2. 고아원 중복 입소 거부: 해시가 같으면 부모목록도 같네.
+	if _, exists := b.lostParentCount[vtx.Hash]; exists {
 		return
 	}
 
-	b.orphans[vtx.Hash] = vtx
-	b.missingCount[vtx.Hash] = len(missingHashes)
-	for _, pHash := range missingHashes {
-		b.waitingFor[pHash] = append(b.waitingFor[pHash], vtx)
+	// 3. 중복 부모 제거 및 등록
+	var uniqueHashes []string
+	demerit := 0
+
+	// 잃어버린 부모가 적을 때는 Linear (대부분)
+	if len(missingParents) < 16 {
+		for _, h := range missingParents {
+			found := false
+			for _, existing := range uniqueHashes {
+				if h == existing {
+					found = true
+					demerit += 1
+					break
+				}
+			}
+			if !found {
+				uniqueHashes = append(uniqueHashes, h)
+				b.lostParents[h] = append(b.lostParents[h], vtx)
+			}
+		}
+	} else {
+		// 부모가 많을 때는 map
+		tempMap := make(map[string]struct{})
+		for _, h := range missingParents {
+			if _, ok := tempMap[h]; !ok {
+				tempMap[h] = struct{}{}
+				uniqueHashes = append(uniqueHashes, h)
+				b.lostParents[h] = append(b.lostParents[h], vtx)
+			}
+		}
+		if len(uniqueHashes) != len(missingParents) {
+			demerit += 15
+		}
 	}
+
+	if demerit > 0 && b.slasher != nil {
+		fmt.Printf("[ALARM] 노드 %d의 부정 행위 적발! 벌점 %d점 보고하네.\n", vtx.Author, demerit)
+		b.slasher.AddDemerit(vtx.Author, demerit, vtx, "duplicate parents detected")
+	}
+	b.orphans[vtx.Hash] = vtx
+	b.lostParentCount[vtx.Hash] = len(uniqueHashes)
 }
 
 // OnParentArrival: 부모가 도착했을 때 자식들을 깨워주네.
-func (b *OrphanBuffer) OnParentArrival(pHash string) []*types.Vertex {
+func (b *Orphanage) OnParentArrival(pHash string) []*types.Vertex {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	children, ok := b.waitingFor[pHash]
+	children, ok := b.lostParents[pHash]
 	if !ok {
 		return nil
 	}
@@ -76,7 +119,7 @@ func (b *OrphanBuffer) OnParentArrival(pHash string) []*types.Vertex {
 	var readyChildren []*types.Vertex
 	for _, child := range children {
 		// [방어] 이미 다른 경로로 처리되었을 가능성 체크
-		count, exists := b.missingCount[child.Hash]
+		count, exists := b.lostParentCount[child.Hash]
 		if !exists {
 			continue
 		}
@@ -84,25 +127,25 @@ func (b *OrphanBuffer) OnParentArrival(pHash string) []*types.Vertex {
 		newCount := count - 1
 		if newCount <= 0 {
 			readyChildren = append(readyChildren, child)
-			delete(b.missingCount, child.Hash)
+			delete(b.lostParentCount, child.Hash)
 			delete(b.orphans, child.Hash)
 		} else {
-			b.missingCount[child.Hash] = newCount
+			b.lostParentCount[child.Hash] = newCount
 		}
 	}
 
-	delete(b.waitingFor, pHash)
+	delete(b.lostParents, pHash)
 	return readyChildren
 }
 
-func (b *OrphanBuffer) GetOrphanCount() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.missingCount)
-}
-
-func (b *OrphanBuffer) GetOrphan(hash string) *types.Vertex {
+func (b *Orphanage) GetOrphan(hash string) *types.Vertex {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.orphans[hash]
+}
+
+func (o *Orphanage) Size() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.orphans)
 }
