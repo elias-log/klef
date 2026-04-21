@@ -25,10 +25,10 @@ Ultimately, this system is not designed to be the fastest blockchain in absolute
 
 This project cannot be implemented in a single step. Instead, it must evolve incrementally under the principle of introducing only one new source of complexity at a time. The ultimate goal is a system combining a data DAG with a sharded Jolteon-based consensus layer, but the initial focus must be on building a deterministic state machine without consensus or sharding.
 
-### Phase 0: DAG Structure and Synchronization (Now)
+### Phase 0: DAG Structure and Synchronization (Done)
 The goal is to construct a DAG with parent references and ensure it can be shared and reconstructed across nodes. At this stage, transactions carry no semantic meaning. Orphan handling must be implemented, buffering nodes whose parents have not yet arrived. The result is a consistent DAG structure across nodes given the same inputs.
 
-### Phase 1: Single-node State Machine
+### Phase 1: Single-node State Machine (Now)
 Introduce the object model and transaction execution logic. Each object has an ID and version, and transactions consume specific versions to produce new ones. Executing transactions in topological order must always yield the same state. The result is a fully deterministic execution environment on a single node.
 
 ### Phase 2: Deterministic Conflict Resolution (Tie-breaking)
