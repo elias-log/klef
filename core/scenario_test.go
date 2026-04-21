@@ -4,7 +4,10 @@ import (
 	"arachnet-bft/config"
 	"arachnet-bft/types"
 	"fmt"
+	"math/rand"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestDAGOrphanAndInsertion(t *testing.T) {
@@ -225,7 +228,7 @@ func TestInvalidHashRejected(t *testing.T) {
 
 	vtx := CreateDummyVertex(1, 1, []string{}, signer)
 
-	// 공격: 데이터를 살짝 바꿈세 (Hash는 그대로 두고 Payload만 변경)
+	// 공격: 데이터를 살짝 바꾸세 (Hash는 그대로 두고 Payload만 변경)
 	vtx.Round = 999
 
 	v.DAG.AddVertex(vtx, 1)
@@ -302,14 +305,14 @@ func TestDAGConsistencyAndReconstruction(t *testing.T) {
 	// 2. 노드 B: 고아원과 함께 탄생!
 	nodeB := NewValidator(1, cfg, signer)
 
-	// 3. [핵심] 순서를 완전히 뒤섞어서 노드 B에 주입하네.
+	// 3. 순서를 완전히 뒤섞어서 노드 B에 주입하네.
 	// 9번(자식)부터 0번(조상) 순서로 거꾸로 넣어보겠네.
 	for i := 9; i >= 0; i-- {
 		nodeB.DAG.AddVertex(vertices[i], 5)
 	}
 
 	// 4. 최종 검증
-	// A와 B의 DAG 사이즈가 같아야 하고, 마지막 팁(Tips)의 해시가 일치해야 하네.
+	// A와 B의 DAG 사이즈가 같아야 하고, 마지막 Tips의 해시가 일치해야 하네.
 	if len(nodeA.DAG.Vertices) != len(nodeB.DAG.Vertices) {
 		t.Errorf("❌ 불일치! 노드A 사이즈: %d, 노드B 사이즈: %d",
 			len(nodeA.DAG.Vertices), len(nodeB.DAG.Vertices))
@@ -327,7 +330,7 @@ func TestDAGConsistencyAndReconstruction(t *testing.T) {
 
 func TestAbnormalEdgeCases(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.DAG.OrphanCapacity = 2 // 용량을 아주 작게!
+	cfg.DAG.OrphanCapacity = 2 // 용량을 아주 작게
 	signer, _ := NewEd25519Signer()
 	v := NewValidator(0, cfg, signer)
 
@@ -349,11 +352,10 @@ func TestAbnormalEdgeCases(t *testing.T) {
 			v.DAG.AddVertex(vtx, 1)
 		}
 
-		// 2. 초과분 주입 (이때는 [DEBUG] 로그가 안 찍힐 걸세. return으로 바로 나가니까!)
+		// 2. 초과분 주입
 		vtxExtra := CreateDummyVertex(0, 99, []string{"missing_99"}, signer)
 		v.DAG.AddVertex(vtxExtra, 1)
 
-		// 3. 확실한 출력
 		size := v.DAG.Buffer.Size()
 		fmt.Printf("\n[TEST_RESULT] 현재 고아원 크기: %d (Limit: 2)\n", size)
 
@@ -363,4 +365,50 @@ func TestAbnormalEdgeCases(t *testing.T) {
 			t.Errorf("❌ 용량 초과! %d개가 들어있네.", size)
 		}
 	})
+}
+
+//Thread-Safety, Order-Independence, Idempotency Test
+func TestRandomizedDeliveryConvergence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	signer, _ := NewEd25519Signer()
+
+	nodeA := NewValidator(0, cfg, signer)
+	nodeB := NewValidator(1, cfg, signer)
+
+	// 동일 vertex set 생성
+	vertices := generateComplexDAG(50)
+
+	// A는 정상 순서
+	for _, vtx := range vertices {
+		nodeA.DAG.AddVertex(vtx, 10)
+	}
+
+	// B는 고루틴을 이용한 랜덤 순서 + 중복 삽입
+	var wg sync.WaitGroup
+	shuffled := shuffle(vertices)
+
+	for _, vtx := range shuffled {
+		wg.Add(1)
+		go func(v *types.Vertex) {
+			defer wg.Done()
+
+			// 1. 랜덤한 네트워크 지연 시뮬레이션
+			time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
+
+			// 2. 주입
+			nodeB.DAG.AddVertex(v, 10)
+
+			// 3. 중복 주입 시뮬레이션
+			if rand.Intn(2) == 0 {
+				nodeB.DAG.AddVertex(v, 10)
+			}
+		}(vtx)
+	}
+
+	wg.Wait() // 모든 난리가 끝날 때까지 대기
+
+	// 이 난리통을 겪고도 A와 B가 같아야 진짜 결정론적일세.
+	if !compareDAGFull(nodeA.DAG, nodeB.DAG) {
+		t.Fatal("❌ DAG divergence detected! 병렬 주입 환경에서 결과가 틀어짐세.")
+	}
 }

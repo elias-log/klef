@@ -1,53 +1,16 @@
-//Vertex 저장소 및 그래프 관계 관리
 /*
-  IMPLEMENTED:
-  아래 기능들은 검증 및 구현이 완료되어 시스템의 중추 역할을 수행 중이네.
+[PROVEN MECHANISMS]
+- Deterministic insertion order via sorted orphan release
+- Existence-based causality validation (not full validation yet)
+- Event-driven orphan resolution (cascade)
+- Worklist-based non-recursive insertion
+- Modular dependency injection (Config / Fetcher / Orphanage)
 
-  1. 동적 의존성 주입 (Dependency Injection):
-     - Config(장부), Fetcher(동기화 장치), OrphanBuffer(미아 보호소)를
-       생성 시점에 주입받아 모듈 간 결합도를 낮추고 유연성을 확보함.
-
-  2. 지능형 Vertex 삽입 로직 (AddVertex):
-     - 진위 확인: Vertex의 해시를 직접 재계산하여 데이터 무결성을 검증함.
-     - 의존성 검사: 부모 노드의 존재 여부를 파악하여 즉시 삽입 혹은 대기실 행을 결정함.
-     - 능동적 동기화: 현재 노드와 제안된 Vertex 간의 라운드 격차(SyncTriggerThreshold)를
-       분석하여 필요시 자동으로 Fetcher를 가동함.
-
-  3. 안전한 반복적 삽입 알고리즘 (Iterative Insertion):
-     - 재귀 호출(Recursion)을 배제하고 워크리스트(Worklist) 기반의 반복문을 채택함.
-     - 스택 오버플로를 방지하고, 대규모 도미노 삽입 상황에서도 메모리 안정성을 보장함.
-     - 세밀한 락(Lock) 제어를 통해 데이터 일관성과 성능의 균형을 맞춤.
-
-  4. 고아 노드 관리 (Orphan Handling):
-     - 부모가 없는 노드를 OrphanBuffer에 격리하고, 부모 도착 시 즉시 해방시키는
-       이벤트 기반의 연쇄 삽입 시스템 구축 완료.
-
-  5. 설정 기반 운영 (Policy-Mechanism Separation):
-     - 하드코딩된 수치(2, 10000 등)를 Config 객체로 이관함.
-     - OrphanCapacity, SyncTriggerThreshold 등의 세련된 명칭을 사용하여
-       코드의 가독성과 운영 편의성을 극대화함.
-*/
-
-/*
-	TODO:
-	1. 인과 관계 및 정당성 검증 (Validity Check)
-	- 부모 라운드 검증: vtx.Round가 모든 부모 라운드보다 정확히 1 큰지 확인 (라운드 점프 방지)
-	- 작성자 중복 투표(Equivocation) 탐지: 동일한 Author가 동일한 Round에 서로 다른 두 개의 Vertex를 생성했는지 감시하고, 발견 시 Slashing에 전달
-	- 부모 참조 무결성: 부모 해시들이 실제로 유효한 구조를 가졌는지, 자기 자신을 부모로 참조하는 순환 참조는 없는지 체크
-
-	2.합의 알고리즘 인터페이스 (Consensus Integration)
-	- Anchor 선출: 특정 라운드에서 합의의 기준이 될 Anchor Vertex를 결정하는 로직을 구현
-	- Virtual Voting (가상 투표): 직접 메시지를 주고받지 않고, DAG의 연결 구조만으로 투표 결과를 계산하는 Order 함수가 필요
-	- Finality 결정: 어떤 Vertex가 "절대 뒤집히지 않는다"고 확정(Finalized)되는 순간을 정의하고, 이를 통해 트랜잭션의 실행 순서를 확정
-
-	3. 성능 및 자원 관리 (Maintenance)
-	- DAG Pruning: 너무 오래된 라운드의 데이터는 메모리에서 해제하고 스토리지(DB)로 옮기거나 삭제하는 로직이 필요
-	- Snapshoting: 특정 시점의 DAG 상태를 요약하여 새로운 노드가 빠르게 동기화할 수 있도록 돕는 스냅샷 기능을 고려
-	- Index 최적화: 현재 RoundIndex 외에 AuthorIndex 등을 추가하여 특정 노드가 만든 Vertex를 빠르게 조회할 수 있게 확장
-
-	4. 동기화 고도화 (Sync Expansion)
-	- Batch Fetching: GetMissingHashes 결과가 너무 많을 경우, 이를 적절한 크기로 쪼개서 여러 피어에게 분산 요청하는 로직을 Fetcher와 연계
-	- Priority Queue: worklist를 단순 슬라이스가 아닌 라운드 순 정렬 큐로 바꿔서, 낮은 라운드부터 차례대로 안정적으로 삽입되게 보장
+[KNOWN LIMITATIONS]
+- No full semantic validation (round / equivocation)
+- Local non-determinism in orphan eviction (eventual convergence)
+- Locking is not strictly fine-grained
+- Parent ordering must remain deterministic (critical invariant)
 */
 
 package core
