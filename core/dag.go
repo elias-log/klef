@@ -19,6 +19,7 @@ import (
 	"arachnet-bft/config"
 	"arachnet-bft/types"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -53,26 +54,27 @@ func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
 
 func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
-	// 1. 중복 체크
-	if d.GetVertex(vtx.Hash) != nil {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// 1. 중복 체크 (내부 맵 직접 접근으로 데드락 방지)
+	if _, exists := d.Vertices[vtx.Hash]; exists {
 		return
 	}
 
 	// 2. 해시 검증
-	calculatedHash := vtx.CalculateHash()
-	if vtx.Hash != calculatedHash {
-		fmt.Printf("[ERROR] DAG: 해시 불일치! 위변조 의심: %s != %s\n", vtx.Hash, calculatedHash)
+	calcHash := vtx.CalculateHash()
+	if vtx.Hash != calcHash {
+		fmt.Printf("[ERROR] DAG: 해시 불일치! 위변조 의심: %s != %s\n", vtx.Hash, calcHash)
 		return
 	}
 
 	// 3. 없는 부모들 확인
-	missing := d.GetMissingHashes(vtx.Parents)
+	missing := d.getMissingHashesLocked(vtx.Parents)
 
-	// 3. 부모가 하나라도 없다면 Buffer로!
+	// 4. 부모가 하나라도 없다면 orphanage로!
 	if len(missing) > 0 {
-		//Log
-		fmt.Printf("[DEBUG] DAG: Vertex %s 는 고아일세. 누락된 부모: %v\n", vtx.Hash[:8], missing)
-
+		fmt.Printf("[DEBUG] DAG: Vertex %s 고아 보관\n", vtx.Hash[:8])
 		d.Buffer.AddOrphan(vtx, missing)
 
 		// Sync: 내 라운드보다 훨씬 높은 녀석이 오면 내가 뒤처진 걸세!
@@ -86,7 +88,49 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 	// TODO: validateVertex(vtx)
 
 	// 4. 부모가 다 있다면 정식 삽입!
-	d.insert(vtx)
+	d.insertRecursiveLocked(vtx)
+}
+
+// insertRecursiveLocked: 락이 걸린 상태에서 연쇄 삽입을 처리하네.
+func (d *DAG) insertRecursiveLocked(initialVtx *types.Vertex) {
+	worklist := []*types.Vertex{initialVtx}
+
+	for len(worklist) > 0 {
+		vtx := worklist[0]
+		worklist = worklist[1:]
+
+		if _, exists := d.Vertices[vtx.Hash]; exists {
+			continue
+		}
+
+		// 결정론적 데이터 기록
+		d.Vertices[vtx.Hash] = vtx
+		d.RoundIndex[vtx.Round] = append(d.RoundIndex[vtx.Round], vtx.Hash)
+
+		// [결정적 순서 보장] 해시값 기준 오름차순 정렬
+		sort.Strings(d.RoundIndex[vtx.Round])
+		// TODO: 삽입 시마다 정렬하는 방식은 라운드당 Vertex가 많아질 경우 성능 병목이 될 수 있음.
+		// 향후 binary search를 이용한 정렬 삽입(Sorted Insertion)으로 최적화 검토 필요.
+
+		fmt.Printf("[DEBUG] DAG: Vertex %s 삽입 성공 (Round %d)\n", vtx.Hash[:8], vtx.Round)
+
+		// 고아 해방
+		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
+		if len(readyChildren) > 0 {
+			worklist = append(worklist, readyChildren...)
+		}
+	}
+}
+
+// getMissingHashesLocked: 락을 잡지 않는 내부용 메서드 (데드락 방지용)
+func (d *DAG) getMissingHashesLocked(hashes []string) []string {
+	var missing []string
+	for _, h := range hashes {
+		if _, exists := d.Vertices[h]; !exists {
+			missing = append(missing, h)
+		}
+	}
+	return missing
 }
 
 // GetMissingHashes: 인자로 받은 해시들 중 우리 DAG에 없는 것들만 골라내네.
