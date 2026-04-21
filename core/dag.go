@@ -13,6 +13,10 @@
 - Parent ordering must remain deterministic (critical invariant)
 */
 
+// LOCK ORDER GUARANTEE:
+// DAG.mu must always be acquired before Orphanage.mu.
+// Orphanage must NEVER call back into DAG.
+
 package core
 
 import (
@@ -52,25 +56,38 @@ func NewDAG(fetcher SyncFetcher, cfg *config.Config) *DAG {
 	}
 }
 
+// Lock Hierarchy:
+// DAG.mu  >  Orphanage.mu
 func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// 1. 중복 체크 (내부 맵 직접 접근으로 데드락 방지)
-	if _, exists := d.Vertices[vtx.Hash]; exists {
-		return
-	}
-
-	// 2. 해시 검증
+	// 1. 원본 기준 해시 검증
 	calcHash := vtx.CalculateHash()
 	if vtx.Hash != calcHash {
-		fmt.Printf("[ERROR] DAG: 해시 불일치! 위변조 의심: %s != %s\n", vtx.Hash, calcHash)
+		fmt.Printf("[ERROR] DAG: 해시 불일치!: %s\n", vtx.Hash)
+		// TODO: reject and slash (단순 전송오류일수도 있나? 검토 필요)
 		return
 	}
 
-	// 3. 없는 부모들 확인
+	// 2. 원본을 정렬하고 중복이 제거된 상태로 변경
+	if types.IsMalformed(vtx.Parents) {
+		fmt.Printf("[CRITICAL] 비잔틴 노드 %d 확인: 해시가 맞지만, 형식오류데이터 고의 전송\n", vtx.Author)
+		d.Slasher.AddDemerit(
+			vtx.Author,
+			d.Config.Security.MalformedVertexPenalty,
+			vtx,
+			"Malformed Parents: Unsorted or Duplicated",
+		)
+		return
+	}
+
+	// 3. 중복 및 부모 확인
+	d.mu.RLock()
+	_, exists := d.Vertices[vtx.Hash]
 	missing := d.getMissingHashesLocked(vtx.Parents)
+	d.mu.RUnlock()
+	if exists {
+		return
+	}
 
 	// 4. 부모가 하나라도 없다면 orphanage로!
 	if len(missing) > 0 {
@@ -87,35 +104,38 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 	// TODO: validateVertex(vtx)
 
-	// 4. 부모가 다 있다면 정식 삽입!
-	d.insertRecursiveLocked(vtx)
+	// 5. 정식 삽입
+	d.processInsertion(vtx)
 }
 
-// insertRecursiveLocked: 락이 걸린 상태에서 연쇄 삽입을 처리하네.
-func (d *DAG) insertRecursiveLocked(initialVtx *types.Vertex) {
+// processInsertion:
+func (d *DAG) processInsertion(initialVtx *types.Vertex) {
 	worklist := []*types.Vertex{initialVtx}
 
 	for len(worklist) > 0 {
 		vtx := worklist[0]
 		worklist = worklist[1:]
 
+		d.mu.Lock()
 		if _, exists := d.Vertices[vtx.Hash]; exists {
+			d.mu.Unlock()
 			continue
 		}
 
-		// 결정론적 데이터 기록
+		// 데이터 기록
 		d.Vertices[vtx.Hash] = vtx
 		d.RoundIndex[vtx.Round] = append(d.RoundIndex[vtx.Round], vtx.Hash)
 
 		// [결정적 순서 보장] 해시값 기준 오름차순 정렬
 		sort.Strings(d.RoundIndex[vtx.Round])
-		// TODO: 삽입 시마다 정렬하는 방식은 라운드당 Vertex가 많아질 경우 성능 병목이 될 수 있음.
-		// 향후 binary search를 이용한 정렬 삽입(Sorted Insertion)으로 최적화 검토 필요.
+		// TODO Phase1: 삽입 시마다 정렬하는 방식은 라운드당 Vertex가 많아질 경우 성능 병목이 될 수 있음.
+		// 향후 binary search를 이용한 Sorted Insertion으로 최적화 검토 필요.
+
+		// 고아 해방: Orphanage 내부의 Lock은 DAG Lock의 하위 계급이므로 안전하네.
+		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
+		d.mu.Unlock()
 
 		fmt.Printf("[DEBUG] DAG: Vertex %s 삽입 성공 (Round %d)\n", vtx.Hash[:8], vtx.Round)
-
-		// 고아 해방
-		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
 		if len(readyChildren) > 0 {
 			worklist = append(worklist, readyChildren...)
 		}
@@ -152,38 +172,6 @@ func (d *DAG) GetVertex(hash string) *types.Vertex {
 	d.mu.RLock() // 읽기 전용 락일세 (성능에 좋지!)
 	defer d.mu.RUnlock()
 	return d.Vertices[hash]
-}
-
-func (d *DAG) insert(initialVtx *types.Vertex) {
-	// 1. 앞으로 처리해야 할 Vertex들을 담을 '할 일 목록'이네.
-	worklist := []*types.Vertex{initialVtx}
-
-	for len(worklist) > 0 {
-		// 목록에서 맨 앞의 녀석을 꺼내옴세.
-		vtx := worklist[0]
-		worklist = worklist[1:]
-
-		d.mu.Lock()
-		// 중복 방지
-		if _, exists := d.Vertices[vtx.Hash]; exists {
-			d.mu.Unlock()
-			continue
-		}
-
-		// 2. 진짜 DAG에 기록
-		d.Vertices[vtx.Hash] = vtx
-		d.RoundIndex[vtx.Round] = append(d.RoundIndex[vtx.Round], vtx.Hash)
-		d.mu.Unlock()
-
-		// Log
-		fmt.Printf("[DEBUG] DAG: Vertex %s 정식 삽입 성공!\n", vtx.Hash[:8])
-
-		// 3. 연쇄 반응: 이 부모를 기다리던 자식들을 워크리스트에 추가
-		readyChildren := d.Buffer.OnParentArrival(vtx.Hash)
-		if len(readyChildren) > 0 {
-			worklist = append(worklist, readyChildren...)
-		}
-	}
 }
 
 // GetVerticesByRound: 특정 라운드에 생성된 모든 Vertex를 가져오네.

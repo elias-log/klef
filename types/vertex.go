@@ -79,6 +79,7 @@ func (v *Vertex) CalculateHash() string {
 	//
 	// 4. 무상태성 (Stateless):
 	//    외부 환경이나 메타데이터(예: gob의 타입 정보)를 배제하고 오직 순수 데이터만 추출함
+
 	buf := new(bytes.Buffer)
 
 	// 1. Author & Round
@@ -139,7 +140,54 @@ func (v *Vertex) CalculateHash() string {
 	return hex.EncodeToString(hash[:])
 }
 
-// HasDuplicate: 슬라이스 내에 중복된 해시가 있는지 검사하네.
+func (v *Vertex) Normalize() (hadDuplicate bool) {
+	beforeLen := len(v.Parents)
+
+	// dedup + sort
+	v.Parents = deduplicateAndSort(v.Parents)
+
+	// 단순 길이 비교는 순서 바뀜을 체크 못 하므로,
+	// deep equal이나 hash 비교를 쓰기도 하지만 지금은 중복 제거 위주로 하겠네.
+	return len(v.Parents) != beforeLen
+}
+
+// deduplicateAndSort: 중복 제거 후 정렬된 슬라이스를 반환하는 도우미 함수일세.
+func deduplicateAndSort(in []string) []string {
+	if len(in) <= 1 {
+		sort.Strings(in) // 1개일 때도 정렬은 수행하네.
+		return in
+	}
+
+	seen := make(map[string]struct{})
+	unique := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, exists := seen[s]; !exists {
+			seen[s] = struct{}{}
+			unique = append(unique, s)
+		}
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+// Canonical Parent Ordering is part of protocol validity.
+// Any deviation is treated as Byzantine behavior.
+func IsMalformed(parents []string) bool {
+	if len(parents) <= 1 {
+		return false
+	}
+
+	for i := 0; i < len(parents)-1; i++ {
+		// 1. 정렬 확인 (오름차순이 아니면 에러)
+		if parents[i] >= parents[i+1] {
+			// TODO: Slasher에 연계
+			return true // 중복이거나 정렬 오류
+		}
+	}
+	return false
+}
+
+// HasDuplicate: 슬라이스 내에 중복된 해시가 있는지 검사하네. (검증용)
 func HasDuplicate(elements []string) bool {
 	encountered := make(map[string]struct{})
 	for _, v := range elements {

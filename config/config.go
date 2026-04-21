@@ -48,8 +48,9 @@ type ConsensusConfig struct {
 }
 
 type SecurityConfig struct {
-	SlashThreshold      int `yaml:"slash_threshold"`
-	EquivocationPenalty int `yaml:"equivocation_penalty"`
+	SlashThreshold         int `yaml:"slash_threshold"`
+	MalformedVertexPenalty int `yaml:"malformed_vertex_penalty"`
+	EquivocationPenalty    int `yaml:"equivocation_penalty"`
 }
 
 type ResourceConfig struct {
@@ -84,8 +85,9 @@ func DefaultConfig() *Config {
 			CommitteeQuorumRatio: 0.75,
 		},
 		Security: SecurityConfig{
-			SlashThreshold:      100,
-			EquivocationPenalty: 100,
+			SlashThreshold:         100,
+			MalformedVertexPenalty: 15,
+			EquivocationPenalty:    100,
 		},
 		Resource: ResourceConfig{
 			FetcherChannelSize:   100,

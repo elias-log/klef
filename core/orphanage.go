@@ -22,15 +22,14 @@
 	(i.e., all missing parent vertices are eventually received) and no permanent data loss.
 
 - Non-Consensus Scope:
-	The Orphanage mechanism is not part of the consensus-critical path.
-	It is a local optimization layer for data availability and does not affect final state determinism.
+	Orphanage itself is not consensus-critical,
+	but its output must be deterministically consumed.
 */
 
 package core
 
 import (
 	"arachnet-bft/types"
-	"fmt"
 	"sort"
 	"sync"
 )
@@ -68,8 +67,8 @@ func (b *Orphanage) AddOrphan(vtx *types.Vertex, missingParents []string) {
 		return
 	}
 
-	// 2. 고아원 용량 초과 확인: [Fix 3] Deterministic Eviction
-	missingCount := len(missingParents) // 실제로는 중복 제거된 수여야 하네, 하지만 오히려 자기가 손해니 상관없네
+	// 2. 고아원 용량 초과 확인
+	missingCount := len(missingParents)
 	if len(b.lostParentCount) >= b.capacity {
 		victim := b.findVictim(vtx.Hash, missingCount)
 
@@ -82,47 +81,13 @@ func (b *Orphanage) AddOrphan(vtx *types.Vertex, missingParents []string) {
 		b.removeOrphan(victim)
 	}
 
-	// 3. 중복 부모 제거 및 등록
-	var uniqueHashes []string
-	demerit := 0
-
-	// 잃어버린 부모가 적을 때는 Linear (대부분)
-	if len(missingParents) < 16 {
-		for _, h := range missingParents {
-			found := false
-			for _, existing := range uniqueHashes {
-				if h == existing {
-					found = true
-					demerit += 1
-					break
-				}
-			}
-			if !found {
-				uniqueHashes = append(uniqueHashes, h)
-				b.lostParents[h] = append(b.lostParents[h], vtx)
-			}
-		}
-	} else {
-		// 부모가 많을 때는 map
-		tempMap := make(map[string]struct{})
-		for _, h := range missingParents {
-			if _, ok := tempMap[h]; !ok {
-				tempMap[h] = struct{}{}
-				uniqueHashes = append(uniqueHashes, h)
-				b.lostParents[h] = append(b.lostParents[h], vtx)
-			}
-		}
-		if len(uniqueHashes) != len(missingParents) {
-			demerit += 15
-		}
+	// 3. 관계 등록 (이미 missingParents는 Unique & Sorted임이 보장됨)
+	for _, h := range missingParents {
+		b.lostParents[h] = append(b.lostParents[h], vtx)
 	}
 
-	if demerit > 0 && b.slasher != nil {
-		fmt.Printf("[ALARM] 노드 %d의 부정 행위 적발! 벌점 %d점 보고하네.\n", vtx.Author, demerit)
-		b.slasher.AddDemerit(vtx.Author, demerit, vtx, "duplicate parents detected")
-	}
 	b.orphans[vtx.Hash] = vtx
-	b.lostParentCount[vtx.Hash] = len(uniqueHashes)
+	b.lostParentCount[vtx.Hash] = missingCount
 }
 
 // findVictim: 고아원 수용량을 위해 희생될 Vertex의 해시를 결정론적으로 선택하네.
