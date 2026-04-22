@@ -1,16 +1,39 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
+/*
+Validator Peer Management extensions handle remote node discovery and liveness.
+
+Key properties:
+- Concurrency Control: Uses Read-Write Mutexes to balance high-frequency peer
+  queries and occasional state updates.
+- Peer Round Tracking: Maintains a view of the network's logical height to
+  optimize data fetching strategies.
+- Non-deterministic Sampling: Implements randomized peer selection for gossip
+  protocols and request load balancing.
+- Decoupling: Separates peer state management from core consensus logic.
+
+Note:
+- This logic is a candidate for migration to a standalone 'PeerManager'
+  during the Phase 2 refactoring (Orchestrator integration).
+*/
+
 package core
 
-import "math/rand"
+import (
+	"math/rand"
+	"time"
+)
 
-// AddPeer: 새로운 피어가 연결되었을 때 불러주게나.
+/// AddPeer registers a new remote node into the active validator set.
 func (v *Validator) AddPeer(id int) {
 	v.peersMu.Lock()
 	defer v.peersMu.Unlock()
 	v.Peers[id] = true
 }
 
-// UpdatePeerRound: 특정 피어가 알려준 최신 라운드 정보를 갱신하네.
-// 나중에 따라잡기(Sync) 로직에서 누구에게 데이터를 요청할지 결정하는 기준이 되지.
+/// UpdatePeerRound updates the observed logical clock height for a specific peer.
+/// This information is used to prioritize targets during the Vertex synchronization process.
 func (v *Validator) UpdatePeerRound(peerID int, round int) {
 	v.peersMu.Lock()
 	defer v.peersMu.Unlock()
@@ -20,7 +43,7 @@ func (v *Validator) UpdatePeerRound(peerID int, round int) {
 	}
 }
 
-// getActivePeerIDs: 현재 살아있는 피어들의 ID 리스트를 스냅샷으로 가져오네.
+/// getActivePeerIDs returns a snapshot of currently connected and active node IDs.
 func (v *Validator) getActivePeerIDs() []int {
 	v.peersMu.RLock()
 	defer v.peersMu.RUnlock()
@@ -34,7 +57,8 @@ func (v *Validator) getActivePeerIDs() []int {
 	return ids
 }
 
-// GetRandomPeers: Gossip이나 데이터 요청을 위해 무작위로 n개의 피어를 선정하네.
+/// GetRandomPeers selects n distinct active peers for gossip dissemination or data requests.
+/// If n exceeds the total active count, all available active peers are returned.
 func (v *Validator) GetRandomPeers(n int) []int {
 	allPeers := v.getActivePeerIDs()
 	totalActive := len(allPeers)
@@ -43,18 +67,24 @@ func (v *Validator) GetRandomPeers(n int) []int {
 		return []int{}
 	}
 
-	// 요청한 n보다 활성 노드가 적거나 같으면 전체 반환
 	if totalActive <= n {
 		return allPeers
 	}
 
-	// 노드가 충분하다면, 그중 n개만 무작위로 추출하세.
 	return v.shuffleAndPick(allPeers, n)
 }
 
+/// shuffleAndPick performs an in-place Fisher-Yates shuffle on a slice snapshot
+/// using a locally seeded PRNG (Pseudo-Random Number Generator).
 func (v *Validator) shuffleAndPick(peers []int, n int) []int {
-	// 원본 peers는 getActivePeerIDs에서 새로 만든 슬라이스이므로 바로 섞어도 안전하네.
-	rand.Shuffle(len(peers), func(i, j int) {
+	// Safe to mutate as 'peers' is a fresh slice from getActivePeerIDs.
+	// Use a local source to avoid global lock contention on the default rand instance.
+
+	// TODO(Optimization): If called at high frequency, consider pre-allocating
+	// a PRNG per Validator to reduce seed generation overhead (time.Now().UnixNano()).
+
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	r.Shuffle(len(peers), func(i, j int) {
 		peers[i], peers[j] = peers[j], peers[i]
 	})
 

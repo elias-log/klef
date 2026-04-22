@@ -1,3 +1,4 @@
-//투표 수집 및 2f+1 달성 시 QC 생성
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
 
 package consensus

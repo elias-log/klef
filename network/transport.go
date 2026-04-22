@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
 //물리적인 통신 수단(채널, TCP, UDP 등)을 추상화
 
 package network

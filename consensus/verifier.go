@@ -1,4 +1,5 @@
-//"이 데이터가 진짜인가?"를 판단하는 검문소
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
 
 package consensus
 

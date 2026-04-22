@@ -1,4 +1,5 @@
-//메모리 속 객체를 '택배 박스(Byte)'로 포장하거나 뜯는 역할
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
 
 package network
 
@@ -20,7 +21,7 @@ import (
 	"encoding/gob"
 )
 
-// Encode: 객체를 바이트 덩어리로! (Serialization)
+// Encode: 객체->바이트
 func Encode(msg interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -30,7 +31,7 @@ func Encode(msg interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Decode: 바이트를 다시 객체로!
+// Decode: 바이트->객체
 func Decode(data []byte, target interface{}) error {
 	buf := bytes.NewBuffer(data)
 	dec := gob.NewDecoder(buf)

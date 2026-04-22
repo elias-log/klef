@@ -1,3 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
+/*
+Validator network accessors provide high-level messaging primitives.
+
+Key properties:
+- Message Dissemination: Supports Broadcast, Multicast, and Unicast patterns.
+- Abstraction: Decouples consensus logic from the underlying P2P transport layer.
+- Future-Proofing: Designed to bridge with the 'PeerManager' and 'NetworkStack'.
+
+Note:
+- Current implementations are simulation stubs for message relay.
+- Actual wire-protocol serialization and peer routing will be integrated in Phase 3.
+- These methods are non-blocking assumptions in current design.
+  Future implementations must ensure network calls do not block consensus-critical paths.
+*/
+
 package core
 
 import (
@@ -5,25 +23,33 @@ import (
 	"fmt"
 )
 
-// Broadcast: Broadcaster 인터페이스 규격 (types.MessageType, interface{}) 준수
+/// Broadcast disseminates a message to all registered peers in the network.
 func (v *Validator) Broadcast(msgType types.MessageType, payload interface{}) {
 	v.peersMu.RLock()
-	defer v.peersMu.RUnlock()
+	peers := make([]int, 0, len(v.Peers))
+	for id := range v.Peers {
+		peers = append(peers, id)
+	}
+	v.peersMu.RUnlock()
 
-	for peerID := range v.Peers {
+	for _, peerID := range peers {
 		v.SendTo(peerID, msgType, payload)
 	}
 }
 
-// SendTo: Broadcaster 인터페이스 규격 준수
+/// SendTo dispatches a message to a specific target peer.
+/// This method acts as the primary egress point for serialized P2P traffic.
+// TODO(Network): payload is intentionally abstract and will be serialized at the network layer.
 func (v *Validator) SendTo(targetID int, msgType types.MessageType, payload interface{}) {
-	// 여기서 나중에 NetworkManager나 실제 P2P 레이어를 호출하면 되네.
-	// 지금은 Proposer가 던진 데이터를 전송하는 시뮬레이션만 하세.
-	fmt.Printf("[RELAY] Validator %d -> Peer %d: [%v] 전송 시도\n", v.ID, targetID, msgType)
+	// TODO(Network): Bridge this call with the actual P2P layer or PeerManager.
+	// Currently simulates the transmission of consensus data.
+	// TODO: Replace with structured logger (zap/logrus) in production
+	fmt.Printf("[RELAY] Validator %d -> Peer %d: [%v] Transmission initiated.\n", v.ID, targetID, msgType)
 }
 
-// Multicast: Broadcaster 인터페이스 규격 준수
+/// Multicast sends a message to a specific subset of peers, typically a committee.
 func (v *Validator) Multicast(committee []int, msgType types.MessageType, payload interface{}) {
+	// Assumes committee membership is pre-validated and trusted.
 	for _, peerID := range committee {
 		v.SendTo(peerID, msgType, payload)
 	}

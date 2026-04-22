@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
 package types
 
 type MessageType uint8
@@ -58,7 +61,7 @@ type FetchResponse struct {
   [Evidence Handling Rules]
   1. 무결성: 모든 Proof는 해당 Author의 유효한 서명을 포함해야 하네.
   2. 가벼움: 나중에는 Vertex 전체 대신, (해시 + 서명)만 담아 패킷 크기를 줄이세.
-  3. 전파: 한 번 검증된 증거는 모든 이웃 노드에게 'Gossip' 프로토콜로 빛의 속도로 퍼뜨리게나.
+  3. 전파: 한 번 검증된 증거는 모든 이웃 노드에게 Gossip 프로토콜로 전파하네.
 */
 // 범행 증거
 type Evidence struct {
@@ -75,7 +78,6 @@ type Evidence struct {
 
 // IsValid: 증거가 논리적으로 타당한지 스스로 검사하네.
 func (e *Evidence) IsValid() bool {
-	// 물증1이 없으면 재판 자체가 안 되지!
 	if e.Proof1 == nil {
 		return false
 	}

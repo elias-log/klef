@@ -1,3 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
+/*
+VotePool is a placeholder for vote aggregation logic.
+
+Current status:
+- Minimal structure for round-based vote storage.
+- Intended to evolve into a quorum-aware aggregation module.
+
+Design intent:
+- Collect and manage votes per round.
+- Support future quorum formation and validation logic.
+
+Note:
+- Implementation is intentionally incomplete at this stage.
+- Will be expanded in later consensus phases.
+*/
+
 package core
 
 import (
@@ -21,5 +40,3 @@ func (vp *VotePool) GetVotesByRound(round int) []*types.Message {
 	defer vp.mu.RUnlock()
 	return vp.votes[round]
 }
-
-// AddVote 등 투표를 채워넣는 로직도 여기에 추가할 것이네.

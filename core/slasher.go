@@ -1,3 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
+/*
+Slasher monitors and penalizes protocol violations to maintain network integrity.
+
+Key properties:
+- Equivocation Detection: Identifies and punishes nodes issuing conflicting votes/vertices.
+- Evidence Management: Maintains a verifiable ledger of proofs for external reporting.
+- Reputation Tracking: Enforces a penalty-based threshold (Slashing) to ignore malicious nodes.
+- Internal/External Integration: Processes both locally detected and peer-reported violations.
+
+Note:
+- The Slasher enforces accountability for protocol violations,
+  complementing the system’s overall BFT safety guarantees.
+- Nodes exceeding the penalty threshold are excluded from consensus participation.
+*/
+
 package core
 
 import (
@@ -8,14 +26,19 @@ import (
 	"time"
 )
 
+/// Slasher acts as the judiciary branch of the validator node.
+// Anti-replay: keyed by primary proof hash.
+// NOTE: Future improvement should canonicalize Evidence identity
+// to avoid duplicate processing across permutations.
 type Slasher struct {
 	mu           sync.RWMutex
-	evidences    map[int][]types.Evidence // Validator ID -> 증거 목록
-	penaltyTable map[int]int              // Validator ID -> 벌점
-	processedEv  map[string]bool          // 이미 판결이 끝난 증거물(Vertex Hash) 목록
-	Config       *config.Config           // 판사님의 법전일세!
+	evidences    map[int][]types.Evidence // Validator ID -> List of cryptographic proofs
+	penaltyTable map[int]int              // Validator ID -> Accumulated demerit points
+	processedEv  map[string]bool          // Anti-replay: Map of already adjudicated Evidence hashes
+	Config       *config.Config           // Security policies and penalty thresholds
 }
 
+/// NewSlasher initializes the security engine with protocol configurations.
 func NewSlasher(cfg *config.Config) *Slasher {
 	return &Slasher{
 		evidences:    make(map[int][]types.Evidence),
@@ -25,42 +48,43 @@ func NewSlasher(cfg *config.Config) *Slasher {
 	}
 }
 
-// HandleEquivocation: 이중 투표시 호출하여 즉시 처벌하고 증거를 생성하네.
+/// HandleEquivocation is triggered when a local node detects a double-vote/double-propose.
+/// It generates an immediate cryptographic proof of the violation.
 func (s *Slasher) HandleEquivocation(vtx1, vtx2 *types.Vertex) *types.Evidence {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	fmt.Printf("[SLASHER] Validator %d 의 이중 투표 적발! (Round: %d)\n", vtx1.Author, vtx1.Round)
+	fmt.Printf("[SLASHER] Critical: Equivocation detected by Validator %d (Round: %d)\n", vtx1.Author, vtx1.Round)
 
-	// 벌점 부과
+	// Apply severe penalty for intentional protocol deviation.
 	s.penaltyTable[vtx1.Author] += s.Config.Security.EquivocationPenalty
 
-	// 고발장
 	evidence := types.Evidence{
 		TargetID:   vtx1.Author,
 		Type:       types.MsgVertex,
 		Proof1:     vtx1,
 		Proof2:     vtx2,
-		ReporterID: 0, // TODO: 나중에 실제 내 ID를 넣어야 하네
+		ReporterID: s.Config.NodeID,
 	}
 
 	s.evidences[vtx1.Author] = append(s.evidences[vtx1.Author], evidence)
 	return &evidence
 }
 
-// ProcessExternalEvidence: 남이 보내온 고발장을 검토하고 판결을 내리네.
+/// ProcessExternalEvidence adjudicates violations reported by other nodes in the network.
 func (s *Slasher) ProcessExternalEvidence(ev *types.Evidence) {
-	// 1. 고발장이 논리적으로 타당한지 검사하네
+	// 1. Logical & cryptographic validation:
+	// Ensures the evidence represents a valid equivocation proof
+	// (e.g., same author, same round, conflicting payloads, valid signatures).
 	if !ev.IsValid() {
-		fmt.Printf("[SLASHER] 유효하지 않은 고발장 기각 (Target: %d)\n", ev.TargetID)
+		fmt.Printf("[SLASHER] Rejection: Invalid evidence reported against Target %d\n", ev.TargetID)
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 2. 이미 처벌받았거나 처리된 증거(Proof1 기준)면 기각
-	// Proof1.Hash가 고유한 증거 ID 역할을 한다고 가정하세.
+	// 2. State Guard: Avoid redundant processing or penalizing already excommunicated nodes.
 	if s.penaltyTable[ev.TargetID] >= s.Config.Security.SlashThreshold || s.processedEv[ev.Proof1.Hash] {
 		return
 	}
@@ -76,7 +100,7 @@ func (s *Slasher) ProcessExternalEvidence(ev *types.Evidence) {
 	)
 }
 
-// executeSlasher: [Internal] 실제 장부 기록을 전담하는 서기일세.
+/// executeSlasher [Internal] commits the punishment to the local ledger.
 func (s *Slasher) executeSlasher(
 	target int,
 	amount int,
@@ -99,33 +123,32 @@ func (s *Slasher) executeSlasher(
 	}
 	s.evidences[target] = append(s.evidences[target], evidence)
 
-	fmt.Printf("[SLASHER] Validator %d 벌점 %d 부과! (Total: %d/%d, Reason: %s)\n",
+	fmt.Printf("[SLASHER] Execution: Validator %d penalized by %d (Total: %d/%d, Reason: %s)\n",
 		target, amount, s.penaltyTable[target], s.Config.Security.SlashThreshold, reason)
 }
 
-// GetPenalty: 테스트에서 필요한 기능일세.
+/// GetPenalty retrieves the current accumulated demerit points for a specific validator.
 func (s *Slasher) GetPenalty(validatorID int) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.penaltyTable[validatorID]
 }
 
-// IsSlashed: 이 노드가 감옥에 갔는지 확인하네.
+/// IsSlashed determines if a node has exceeded the security threshold.
+/// Slashed nodes should have their messages ignored by the consensus engine.
 func (s *Slasher) IsSlashed(validatorID int) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// 벌점이 임계치를 넘으면 이 노드의 말은 아무도 안 믿게 될 걸세.
 	return s.penaltyTable[validatorID] >= s.Config.Security.SlashThreshold
 }
 
-// AddDemerit: 내부 모듈 보고용
-// Orphanage 등 내부 모듈에서 가벼운 위반 사항을 보고할 때 사용하네.
+/// AddDemerit allows internal modules (e.g., DAG, Orphanage) to report protocol non-compliance.
 func (s *Slasher) AddDemerit(author int, amount int, vtx *types.Vertex, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 1. 이미 파면된 노드거나 이미 처리된 증거물이면 기각
+	// Skip if the node is already slashed or the evidence has been processed.
 	if s.penaltyTable[author] >= s.Config.Security.SlashThreshold || s.processedEv[vtx.Hash] {
 		return
 	}

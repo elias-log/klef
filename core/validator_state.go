@@ -1,3 +1,19 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
+/*
+Validator state accessors provide controlled access to internal node state.
+
+Key properties:
+- Thread-Safety: Protects critical mutable states using mutexes where required.
+- Abstraction: Shields internal sub-modules from direct dependency on the Validator struct.
+- Invariant Protection: Prevents double-proposing through monotonic round tracking.
+
+Note:
+- Several methods act as stubs for Phase 4/5 integration (Rate Limiting, Anti-Replay).
+- Serves as the primary interface for the Consensus engine to query node capabilities.
+*/
+
 package core
 
 import (
@@ -5,39 +21,47 @@ import (
 	"arachnet-bft/types"
 )
 
+/// GetCurrentRound returns the node's current logical clock height in the DAG.
 func (v *Validator) GetCurrentRound() int {
 	return v.Round
 }
 
+/// IsKnownVertex checks the local DAG storage for the existence of a specific hash.
 func (v *Validator) IsKnownVertex(hash string) bool {
 	return v.DAG.GetVertex(hash) != nil
 }
 
+/// Sign generates a cryptographic signature for the provided data using the node's private key.
 func (v *Validator) Sign(data string) types.Signature {
-	// string 해시를 바이트로 변환해서 서명 대리인에게 맡기네.
 	return v.Signer.Sign([]byte(data))
 }
 
+/// GetQuorumPolicy retrieves the current consensus rules for threshold calculation.
 func (v *Validator) GetQuorumPolicy() consensus.QuorumPolicy {
 	return v.Policy
 }
 
+/// QuorumThreshold returns the minimum number of votes required for each consensus hierarchy.
+// TODO(Consensus): Support context-aware thresholding for multiple QC types (Global/Committee).
 func (v *Validator) QuorumThreshold() int {
 	return v.Policy.GetQuorumSize(types.QCGlobal)
 }
 
+/// GetID returns the unique integer identifier of this validator node.
 func (v *Validator) GetID() int {
 	return v.ID
 }
 
-// AlreadyProposed: 내가 이 라운드(혹은 그 이전)에 이미 제안했는지 확인하네.
+/// AlreadyProposed verifies if the node has already issued a proposal for the given round or higher.
+/// This prevents equivocation and ensures consistency with deterministic finalization rules.
 func (v *Validator) AlreadyProposed(round int) bool {
 	v.proposalMu.Lock()
 	defer v.proposalMu.Unlock()
 	return round <= v.lastProposedRound
 }
 
-// MarkAsProposed: 제안이 성공적으로 전파되었음을 장부에 기록하네.
+/// MarkAsProposed records the successful broadcast of a proposal for a specific round.
+/// It ensures the proposal history only moves forward monotonically.
 func (v *Validator) MarkAsProposed(round int) {
 	v.proposalMu.Lock()
 	defer v.proposalMu.Unlock()
@@ -46,20 +70,22 @@ func (v *Validator) MarkAsProposed(round int) {
 	}
 }
 
-// IsDuplicateMessage: 리플레이 공격 방어를 위한 체크 로직 (우선 Stub으로 구현하네)
+/// IsDuplicateMessage provides anti-replay protection by checking message history.
+// TODO(Safety): Implement persistent MessageHistory ledger in Phase 5.
 func (v *Validator) IsDuplicateMessage(peerID int, seq uint64) bool {
-	// TODO: Phase 4나 5 쯤에서 실제 장부(MessageHistory)를 확인하는 로직을 넣으세.
 	return false
 }
 
-// UpdateAndCheckRateLimit: 노드별 요청 제한 (우선 Stub)
+/// UpdateAndCheckRateLimit enforces resource quotas per peer to mitigate DoS attacks.
+// TODO(Stability): Implement sliding-window rate limiting based on Config quotas.
 func (v *Validator) UpdateAndCheckRateLimit(peerID int) bool {
-	// TODO: 특정 피어가 너무 많은 요청을 보내는지 체크하게나.
-	return true // 일단은 모두 통과!
+	return true
 }
 
-// IsFinalized: 특정 해시가 이미 글로벌 확정(Finalized)되었는지 확인
+/// IsFinalized determines whether a vertex has been anchored and included
+/// in the globally deterministic outcome.
+/// Note: Finality is derived from DAG anchoring, not local observation.
+// TODO(Finality): Integrate with the Finalizer's anchor-tracking logic in Phase 8.
 func (v *Validator) IsFinalized(hash string) bool {
-	// TODO: DAG의 Anchor 포인트를 확인하는 로직이 들어갈 자리일세.
 	return false
 }

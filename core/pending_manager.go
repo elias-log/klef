@@ -1,3 +1,30 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
+/*
+PendingManager manages request deduplication, retry scheduling,
+and lifecycle tracking for outbound synchronization requests.
+
+Key properties:
+- Single-flight Guarantee: Ensures that at most one active request
+  per hash exists within a valid time window.
+- Backoff & Jitter: Prevents network congestion using exponential backoff
+  (bounded by MaxBackoff) combined with randomized jitter.
+- Expiry-ordered Cleanup: Uses a min-heap keyed by expiration time
+  to efficiently purge stale requests.
+- Lazy Deletion: Remove operations update only the map,
+  while stale heap entries are discarded during cleanup.
+  Correctness is preserved by validating entries against the current map state.
+- Heap/Map Decoupling: The priority queue may contain stale entries;
+  the map acts as the source of truth.
+- Localized RNG: Uses a dedicated PRNG instance to avoid potential
+  contention on shared random sources.
+
+Note:
+- The manager ensures that the system does not redundantly request the same
+  vertex while a valid request is still in flight.
+*/
+
 package core
 
 import (
@@ -15,7 +42,7 @@ const (
 	maxCleanupInterval = 500 * time.Millisecond
 )
 
-// PendingItem: Priority Queue 내부에서 관리될 데이터
+/// PendingItem represents a request entry within the Priority Queue.
 type PendingItem struct {
 	Hash        string
 	RequestTime time.Time
@@ -23,14 +50,14 @@ type PendingItem struct {
 	index       int
 }
 
-// PendingMeta: 맵에서 관리될 상세 정보
+/// PendingMeta tracks detailed request telemetry for backoff calculations.
 type PendingMeta struct {
 	RequestTime time.Time
 	ExpiryTime  time.Time
 	RetryCount  int
 }
 
-// PendingManager: fetch 요청목록 관리자
+/// PendingManager coordinates the timing and persistence of pending data fetches.
 type PendingManager struct {
 	mu              sync.RWMutex
 	pendingRequests map[string]PendingMeta
@@ -39,7 +66,7 @@ type PendingManager struct {
 	rng             *rand.Rand
 }
 
-// NewPendingManager 생성자
+/// NewPendingManager initializes a manager with a locally seeded PRNG.
 func NewPendingManager(cfg *config.Config) *PendingManager {
 	return &PendingManager{
 		pendingRequests: make(map[string]PendingMeta),
@@ -49,7 +76,7 @@ func NewPendingManager(cfg *config.Config) *PendingManager {
 	}
 }
 
-// Add: 새로운 요청을 등록하거나 기존 요청의 재시도 시간을 갱신하네.
+/// Add registers a new fetch request or updates an existing one with incremented backoff.
 func (pm *PendingManager) Add(hash string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -57,29 +84,25 @@ func (pm *PendingManager) Add(hash string) {
 	now := time.Now()
 	meta, exists := pm.pendingRequests[hash]
 
-	// 1. [중복 체크] 이미 유효한 요청이 진행 중이면 무시
+	// 1. Redundancy Guard: Ignore if an active request for the same hash is still valid.
 	if exists && now.Before(meta.ExpiryTime) {
 		return
 	}
 
-	// 2. 리트라이 횟수 계산
+	// 2. Backoff Calculation: Exponentially increase wait time up to 15 retries.
 	retryCount := 0
 	if exists {
 		retryCount = meta.RetryCount + 1
 	}
-
-	// [Updated] 오버플로우 방지
 	if retryCount > 15 {
 		retryCount = 15
 	}
-
-	// 3. 지수 백오프 및 지터 계산
 	backoff := pm.cfg.Request.BaseTimeout * time.Duration(1<<retryCount)
 	if backoff > pm.cfg.Request.MaxBackoff {
 		backoff = pm.cfg.Request.MaxBackoff
 	}
 
-	// [Updated] 로컬 RNG로 지터 계산: Global race 제거
+	// 3. Jitter Injection: Local RNG usage prevents global seed contention.
 	jitter := time.Duration(0)
 	if backoff > 0 {
 		jitter = time.Duration(pm.rng.Int63n(int64(backoff / 5)))
@@ -87,7 +110,7 @@ func (pm *PendingManager) Add(hash string) {
 
 	expiry := now.Add(backoff + jitter)
 
-	// 4. map 갱신 & Queue 삽입
+	// 4. Persistence: Update mapping and priority heap.
 	pm.pendingRequests[hash] = PendingMeta{
 		RequestTime: now,
 		ExpiryTime:  expiry,
@@ -101,20 +124,15 @@ func (pm *PendingManager) Add(hash string) {
 	})
 }
 
-// Remove: 데이터가 성공적으로 수신되었을 때, 즉시 장부에서 제거하네.
+/// Remove purges a hash from the active tracking map.
+/// Causal cleanup in the Priority Queue will be handled lazily by the background loop.
 func (pm *PendingManager) Remove(hash string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-
-	// 맵에서 지워버리면, 나중에 cleanup 루프가 큐를 돌다가
-	// !exists 조건에 걸려 큐에서도 자연스럽게 빠지게 될 걸세.
 	delete(pm.pendingRequests, hash)
-
-	// 참고: 여기서 큐(Heap)를 직접 뒤져서 삭제하는 건 O(N)이라 성능에 좋지 않네.
-	// cleanup에 구현해둔 Lazy Deletion을 사용하고 맵만 지우도록 하겠네!
 }
 
-// IsPending: 특정 해시가 현재 처리 대기 중인지 확인하네.
+/// IsPending checks if a hash is currently awaiting a response within its valid window.
 func (pm *PendingManager) IsPending(hash string) bool {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -122,7 +140,7 @@ func (pm *PendingManager) IsPending(hash string) bool {
 	return exists && time.Now().Before(meta.ExpiryTime)
 }
 
-// StartCleanupLoop: 만료된 요청을 주기적으로 정리하네.
+/// StartCleanupLoop initiates the periodic eviction of stale requests.
 func (pm *PendingManager) StartCleanupLoop(ctx context.Context) {
 	interval := pm.getCleanupInterval()
 	ticker := time.NewTicker(interval)
@@ -138,9 +156,42 @@ func (pm *PendingManager) StartCleanupLoop(ctx context.Context) {
 	}
 }
 
+/// cleanup performs a batch removal of expired or invalidated items from the Priority Queue.
+func (pm *PendingManager) cleanup() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	now := time.Now()
+	for pm.pendingQueue.Len() > 0 {
+		item := pm.pendingQueue[0].(*PendingItem)
+		meta, exists := pm.pendingRequests[item.Hash]
+
+		// Integrity Check: Pop if the item was deleted via Remove() or replaced by a new Add().
+		if !exists || !meta.RequestTime.Equal(item.RequestTime) || !meta.ExpiryTime.Equal(item.ExpiryTime) {
+			heap.Pop(&pm.pendingQueue)
+			continue
+		}
+
+		// Min-Heap property: If the earliest item is still valid, all subsequent items are too.
+		// Since the heap is ordered by ExpiryTime, all subsequent items
+		// must have equal or later expiry times.
+		if now.Before(item.ExpiryTime) {
+			break
+		}
+
+		heap.Pop(&pm.pendingQueue)
+		delete(pm.pendingRequests, item.Hash)
+	}
+}
+
+/// getCleanupInterval dynamically calculates the background GC (Garbage Collection) frequency.
+/// It ensures the interval scales with the request timeout while remaining within
+/// safe operational bounds.
 func (pm *PendingManager) getCleanupInterval() time.Duration {
+	// Target 25% of the base timeout to ensure stale requests are purged promptly.
 	interval := pm.cfg.Request.BaseTimeout / 4
 
+	// Clamp the interval to maintain a balance between CPU usage and memory efficiency.
 	if interval < minCleanupInterval {
 		return minCleanupInterval
 	}
@@ -150,40 +201,9 @@ func (pm *PendingManager) getCleanupInterval() time.Duration {
 	return interval
 }
 
-func (pm *PendingManager) cleanup() {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	now := time.Now()
-	for pm.pendingQueue.Len() > 0 {
-		// 가장 오래된 요청 확인
-		item := pm.pendingQueue[0].(*PendingItem)
-		meta, exists := pm.pendingRequests[item.Hash]
-
-		// [Updated] 데이터 무결성 체크 (RequestTime, ExpiryTime 동시 검증)
-		if !exists || !meta.RequestTime.Equal(item.RequestTime) || !meta.ExpiryTime.Equal(item.ExpiryTime) {
-			heap.Pop(&pm.pendingQueue)
-			continue
-		}
-
-		// 제일 오래된 놈도 아직 안 죽었으면 나머지도 다 살아있네!
-		if now.Before(item.ExpiryTime) {
-			break
-		}
-
-		// 만료된 녀석 제거
-		heap.Pop(&pm.pendingQueue)
-		delete(pm.pendingRequests, item.Hash)
-	}
-}
-
-//Less: 우선순위 결정 (만료 시간이 빠를수록 앞으로!)
+// Internal Priority Queue Interface implementations
 func (pi *PendingItem) Less(other ds.HeapItem) bool {
 	return pi.ExpiryTime.Before(other.(*PendingItem).ExpiryTime)
 }
-
-//SetIndex: ds.priority_queue가 idx를 알려줄 때 기록하네.
 func (pi *PendingItem) SetIndex(idx int) { pi.index = idx }
-
-//GetIndex: 현재 index를 반환하네.
-func (pi *PendingItem) GetIndex() int { return pi.index }
+func (pi *PendingItem) GetIndex() int    { return pi.index }

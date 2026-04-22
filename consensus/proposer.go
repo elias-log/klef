@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
 /*
    <Objectives: Quorum-Driven Vertex Lifecycle>
    1. 투표 기반 부모 확정 (QC Selection):

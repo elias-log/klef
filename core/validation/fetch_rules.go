@@ -1,12 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
 /*
-   [TODO: Unsolicited Response Defense (Request-Response Matching)]
+FetchRules defines the validation logic for synchronization messages (FETCH_REQ/RES).
 
-   현재는 받은 Vertex의 '내용물'만 검증하고 있네. (Stateless Validation)
-   악의적인 피어가 요청하지 않은 데이터를 폭탄처럼 던지는 'Spamming 공격'을 막으려면:
+Key properties:
+[SECURITY STRATEGY: Resource Protection]
+- Tiered Validation: Prioritizes low-cost checks (map lookups) over high-cost checks
+  (hashing, signature verification) to mitigate CPU-exhaustion DoS attacks.
+- Solicitation Enforcement: Rejects 'Unsolicited Responses' by verifying that every
+  incoming vertex was explicitly requested (via PendingManager).
+- DoS Mitigation: Strictly limits the batch size of both requests and responses.
 
-   1. Validator/Fetcher에 map[Hash]time.Time 형태의 PendingRequests 장부를 둘 것.
-   2. FetchRequest를 보낼 때 장부에 기록하고, Response를 받으면 장부에 있는지 확인(WasRequested).
-   3. 장부에 없는 데이터는 검증 비용(CPU)을 쓰기 전에 즉각 폐기할 것.
+[INVARIANTS]
+- Non-empty payload: Both requests and responses must contain at least one element.
+- Structural Sanity: Performs lightweight structural checks before full DAG validation.
 */
 
 package validation
@@ -17,11 +25,13 @@ import (
 	"fmt"
 )
 
-// FetchRequestValidator: 상대방이 보낸 FETCH_REQ 메시지를 검증하네.
+/// FetchRequestValidator inspects incoming sync requests from peers.
 type FetchRequestValidator struct {
-	MaxRequestHashes int // 한 번에 요청할 수 있는 최대 해시 수
+	MaxRequestHashes int // Threshold to prevent massive scanning requests
 }
 
+/// Validate scrutinizes an incoming FetchRequest to ensure it conforms to protocol constraints.
+/// It primarily serves as a resource-protection layer against Malformed requests and DoS attempts.
 func (f *FetchRequestValidator) Validate(msg *types.Message, ctx types.StateReader) error {
 
 	if msg.FetchReq == nil {
@@ -29,12 +39,12 @@ func (f *FetchRequestValidator) Validate(msg *types.Message, ctx types.StateRead
 	}
 	req := msg.FetchReq
 
-	// 1. 최소 1개 이상의 해시는 요청해야 하네.
+	// 1. Minimum sanity check.
 	if len(req.MissingHashes) == 0 {
 		return errors.New("empty missing hashes in request")
 	}
 
-	// 2. 너무 많은 해시를 요청하면 Dos 공격으로 간주하네.
+	// 2. DoS defense: Prevent peers from requesting an unreasonable number of hashes.
 	if f.MaxRequestHashes > 0 && len(req.MissingHashes) > f.MaxRequestHashes {
 		return fmt.Errorf("too many hashes requested: %d", len(req.MissingHashes))
 	}
@@ -42,18 +52,19 @@ func (f *FetchRequestValidator) Validate(msg *types.Message, ctx types.StateRead
 	return nil
 }
 
-// FetchResponseValidator: 상대방이 보낸 FETCH_RES 메시지를 검증하네.
+/// FetchResponseValidator scrutinizes vertices returned in response to our fetch requests.
 type FetchResponseValidator struct {
 	MaxVertexCount int
 }
 
+/// Validate scrutinizes a FetchResponse message containing multiple vertices.
 func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.StateReader) error {
 	if msg.FetchRes == nil {
 		return errors.New("message does not contain a FetchResponse")
 	}
 	res := msg.FetchRes
 
-	// 1. 응답 데이터 개수 검증 (Dos 방어)
+	// 1. Response size validation. (Anti-DoS)
 	if len(res.Vertices) == 0 {
 		return errors.New("empty fetch response")
 	}
@@ -61,48 +72,87 @@ func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.StateRea
 		return errors.New("too many vertices in response")
 	}
 
-	// 2. 각 Vertex의 개별 무결성 및 의미 검증
+	// 2. Individual Vertex Validation (Tiered by Computational Cost).
 	for _, vtx := range res.Vertices {
-		// 1. [비용 최저] 이미 아는 데이터인가? (중복 방어)
+		// [TIER 1: Lowest Cost] Redundancy Check
+		// Ignore if the vertex is already known to the local DAG.
 		if ctx.IsKnownVertex(vtx.Hash) {
 			continue
 		}
 
-		// 2. [비용 저] 내가 요청한 데이터인가? (Spam 방어)
-		// 이 검증이 해시 계산보다 앞에 오는 것이 CPU 보호에 유리하네.
+		// [TIER 2: Low Cost] Spam Defense (Request-Response Matching)
+		// Perform a 'Soft Reject' by skipping vertices that weren't explicitly requested.
+		// This handles edge cases where requests expired due to network latency
+		// without invalidating the entire response.
 		if !ctx.IsRequestPending(vtx.Hash) {
-			return errors.New("unsolicited vertex received: spam attack suspected")
+			fmt.Printf("[DEBUG] Unsolicited vertex skipped: %s\n", vtx.Hash[:8])
+			continue
 		}
 
-		// 3. [비용 중] 라운드 범위 체크 (가장 기본적인 프로토콜 위반 확인)
-		currRound := ctx.GetCurrentRound()
-		if vtx.Round > currRound+10 || (currRound > 50 && vtx.Round < currRound-50) {
-			return fmt.Errorf("vertex %s round out of valid range", vtx.Hash)
+		// [TIER 3: Medium Cost] Protocol Bounds Check
+		// Verify if the vertex round is within an acceptable temporal window.
+		if err := f.validateRoundRange(vtx, ctx); err != nil {
+			return err
 		}
 
-		// 4. [비용 고] 해시 무결성 검증 (이제야 비로소 CPU를 써서 계산하세!)
+		// [TIER 4: High Cost] Cryptographic Integrity
+		// Defer expensive hash calculations until metadata validation passes.
 		if vtx.Hash != vtx.CalculateHash() {
 			return fmt.Errorf("hash mismatch for vertex: %s", vtx.Hash)
 		}
 
-		// 5. [구조 검증] DAG 규칙 확인
-		// 0라운드(Genesis)가 아닌데 부모가 없다면 가짜일세.
-		if vtx.Round > 0 && len(vtx.Parents) == 0 {
-			return fmt.Errorf("non-genesis vertex %s has no parents", vtx.Hash)
+		// [TIER 5: Structural Check] DAG Invariants
+		// Enforce strict causal rules and structural integrity.
+		if err := f.validateStructure(vtx); err != nil {
+			return err
 		}
-
-		parentSet := make(map[string]struct{})
-		for _, pHash := range vtx.Parents {
-			if pHash == vtx.Hash {
-				return fmt.Errorf("circular reference in vertex %s", vtx.Hash)
-			}
-			if _, exists := parentSet[pHash]; exists {
-				return fmt.Errorf("duplicate parent %s in vertex %s", pHash, vtx.Hash)
-			}
-			parentSet[pHash] = struct{}{}
-		}
-		return nil
 	}
 
+	return nil
+}
+
+/// validateRoundRange ensures the vertex falls within valid past/future round boundaries.
+func (f *FetchResponseValidator) validateRoundRange(vtx *types.Vertex, ctx types.StateReader) error {
+	currRound := ctx.GetCurrentRound()
+
+	// TODO(Scalability): Transition from hardcoded drift limits to dynamic, context-aware policies.
+	// As Arachnet evolves with Sharding and Asynchronous Committees, round drift tolerances
+	// should be retrieved via ctx.GetConfig() or adjusted per-mode (Global vs. Local).
+	// [Reference: Phase 2 Scalability Roadmap]
+
+	// Max drift allowed for future rounds to accommodate network latency.
+	maxFuture := 10
+	// Retention window for past rounds to prevent stale data injection.
+	maxPast := 50
+
+	if vtx.Round > currRound+maxFuture {
+		return fmt.Errorf("vertex %s is too far in the future", vtx.Hash)
+	}
+
+	// Strict past-round enforcement only after the initial synchronization phase.
+	if currRound > maxPast && vtx.Round < currRound-maxPast {
+		return fmt.Errorf("vertex %s is too old", vtx.Hash)
+	}
+
+	return nil
+}
+
+/// validateStructure verifies parent references and basic vertex composition rules.
+func (f *FetchResponseValidator) validateStructure(vtx *types.Vertex) error {
+	// Protocol violation: Every vertex except the Genesis must reference at least one parent.
+	if vtx.Round > 0 && len(vtx.Parents) == 0 {
+		return fmt.Errorf("non-genesis vertex %s has no parents", vtx.Hash)
+	}
+
+	parentSet := make(map[string]struct{})
+	for _, pHash := range vtx.Parents {
+		if pHash == vtx.Hash {
+			return fmt.Errorf("circular reference in vertex %s", vtx.Hash)
+		}
+		if _, exists := parentSet[pHash]; exists {
+			return fmt.Errorf("duplicate parent %s in vertex %s", pHash, vtx.Hash)
+		}
+		parentSet[pHash] = struct{}{}
+	}
 	return nil
 }

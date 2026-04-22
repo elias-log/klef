@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 elias-log
+
 package types
 
 // StateReader: 궁금한 걸 물어보는 채널

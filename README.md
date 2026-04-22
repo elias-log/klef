@@ -63,7 +63,7 @@ This is a learning-focused project. The licensing structure is applied to both f
 All commits prior to April 22, 2026 should be considered unpublished work with no license granted.
 The project is licensed under GPL v3 starting from April 22, 2026.
 
-- **Code**: Licensed under GNU General Public License v3.0
+- **Code**: Licensed under GNU General Public License v3.0 or later.
 - **Documentation (Design Overview)**: Licensed under CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
 Copyright (c) 2026 elias-log.
