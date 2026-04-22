@@ -1,6 +1,8 @@
 # arachnet-bft
 
-## 1️. Whitepaper
+This document outlines the current design direction and key ideas under active exploration.
+
+## 1️. Design Overview
 
 This project aims to address two fundamental limitations of existing blockchain systems. First, the reliance on a global state model enforces sequential execution, severely limiting parallelism. Second, systems that adopt optimistic execution for better user experience often sacrifice global consistency. To overcome these issues, this design introduces a hybrid architecture that combines an object-centric state model, a global data DAG (Data Availability & Ordering Layer), and a sharded BFT-based execution layer using Jolteon-style consensus.
 
@@ -20,7 +22,7 @@ Ultimately, this system is not designed to be the fastest blockchain in absolute
 
 
 
-------------------------------
+---
 ## 2. Implementation Waypoints
 
 This project cannot be implemented in a single step. Instead, it must evolve incrementally under the principle of introducing only one new source of complexity at a time. The ultimate goal is a system combining a data DAG with a sharded Jolteon-based consensus layer, but the initial focus must be on building a deterministic state machine without consensus or sharding.
@@ -51,3 +53,17 @@ Enable shards to observe and validate the outputs of other shards via the global
 
 ### Phase 8: Anchoring and Global Ordering
 Define a deterministic anchoring mechanism to finalize the global state. A snapshot of the DAG is taken, transactions are topologically sorted, and conflicts are resolved globally. The result is a consistent final state across all nodes.
+
+---
+
+## License
+
+This is a learning-focused project. The licensing structure is applied to both follow open-source practices and protect the original design.
+
+All commits prior to April 22, 2026 should be considered unpublished work with no license granted.
+The project is licensed under GPL v3 starting from April 22, 2026.
+
+- **Code**: Licensed under GNU General Public License v3.0
+- **Documentation (Design Overview)**: Licensed under CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)
+
+Copyright (c) 2026 elias-log.
