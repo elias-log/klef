@@ -2,7 +2,7 @@
 // Copyright (c) 2026 elias-log
 
 /*
-Vertex defines the atomic unit of the Arachnet-BFT DAG and its Quorum Certificates.
+Vertex defines the atomic unit of the Klef DAG and its Quorum Certificates.
 
 Key properties:
 - Causal Linking: Each vertex references its parents and includes QCs

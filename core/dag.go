@@ -2,7 +2,7 @@
 // Copyright (c) 2026 elias-log
 
 /*
-DAG (Directed Acyclic Graph) serves as the core ledger of Arachnet-BFT.
+DAG (Directed Acyclic Graph) serves as the core ledger of Klef.
 
 Key properties:
 - Deterministic insertion via canonical ordering and sorted orphan release
@@ -27,9 +27,9 @@ Note:
 package core
 
 import (
-	"arachnet-bft/config"
-	"arachnet-bft/types"
 	"fmt"
+	"klef/config"
+	"klef/types"
 	"sort"
 	"sync"
 )

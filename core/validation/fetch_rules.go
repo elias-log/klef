@@ -20,9 +20,9 @@ Key properties:
 package validation
 
 import (
-	"arachnet-bft/types"
 	"errors"
 	"fmt"
+	"klef/types"
 )
 
 /// FetchRequestValidator inspects incoming sync requests from peers.
@@ -116,7 +116,7 @@ func (f *FetchResponseValidator) validateRoundRange(vtx *types.Vertex, ctx types
 	currRound := ctx.GetCurrentRound()
 
 	// TODO(Scalability): Transition from hardcoded drift limits to dynamic, context-aware policies.
-	// As Arachnet evolves with Sharding and Asynchronous Committees, round drift tolerances
+	// As Klef evolves with Sharding and Asynchronous Committees, round drift tolerances
 	// should be retrieved via ctx.GetConfig() or adjusted per-mode (Global vs. Local).
 	// [Reference: Phase 2 Scalability Roadmap]
 

@@ -16,7 +16,7 @@ Note:
 package core
 
 import (
-	"arachnet-bft/types"
+	"klef/types"
 )
 
 /// GetReadyQuorum evaluates the VotePool to determine if the required threshold

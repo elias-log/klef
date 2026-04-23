@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-/// Config represents the root configuration structure for the Arachnet node.
+/// Config represents the root configuration structure for the Klef node.
 type Config struct {
 	NodeID  int    `yaml:"node_id"`
 	Keypath string `yaml:"keypath"`

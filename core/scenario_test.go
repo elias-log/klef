@@ -4,8 +4,8 @@
 package core
 
 import (
-	"arachnet-bft/config"
-	"arachnet-bft/types"
+	"klef/config"
+	"klef/types"
 	"fmt"
 	"math/rand"
 	"sync"

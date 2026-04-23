@@ -1,4 +1,7 @@
-# arachnet-bft
+# Klef
+> Named after Klefki — a key bearer.
+> State is modeled as versioned objects, where conflicts are resolved
+> deterministically through explicit dependencies.
 
 This document outlines the current design direction and key ideas under active exploration.
 
@@ -64,6 +67,6 @@ All commits prior to April 22, 2026 should be considered unpublished work with n
 The project is licensed under GPL v3 starting from April 22, 2026.
 
 - **Code**: Licensed under GNU General Public License v3.0 or later.
-- **Documentation (Design Overview)**: Licensed under CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)
+- **Documentation (Design Overview and Implementation Waypoints)**: Licensed under CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
 Copyright (c) 2026 elias-log.

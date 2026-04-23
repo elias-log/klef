@@ -4,10 +4,10 @@
 package main
 
 import (
-	"arachnet-bft/config"
-	"arachnet-bft/core"
 	"context"
 	"fmt"
+	"klef/config"
+	"klef/core"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,7 +23,7 @@ func main() {
 	defer cancel()
 
 	go v.Start(ctx)
-	fmt.Printf(">>> [RUN] Arachnet-BFT Node %d 가동 중...\n", cfg.NodeID)
+	fmt.Printf(">>> [RUN] Klef Node %d 가동 중...\n", cfg.NodeID)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

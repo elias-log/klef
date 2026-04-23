@@ -3,7 +3,7 @@
 
 package validation
 
-import "arachnet-bft/types"
+import "klef/types"
 
 /// MessageValidator defines the universal interface for all protocol message validation logic.
 type MessageValidator interface {

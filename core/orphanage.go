@@ -44,7 +44,7 @@ Limitations & Local Determinism:
 package core
 
 import (
-	"arachnet-bft/types"
+	"klef/types"
 	"sort"
 	"sync"
 )

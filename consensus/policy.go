@@ -4,7 +4,7 @@
 package consensus
 
 import (
-	"arachnet-bft/types"
+	"klef/types"
 	"math"
 	"sync"
 )

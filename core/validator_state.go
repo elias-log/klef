@@ -17,8 +17,8 @@ Note:
 package core
 
 import (
-	"arachnet-bft/consensus"
-	"arachnet-bft/types"
+	"klef/consensus"
+	"klef/types"
 )
 
 /// GetCurrentRound returns the node's current logical clock height in the DAG.

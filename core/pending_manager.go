@@ -28,8 +28,8 @@ Note:
 package core
 
 import (
-	"arachnet-bft/config"
-	"arachnet-bft/internal/ds"
+	"klef/config"
+	"klef/internal/ds"
 	"container/heap"
 	"context"
 	"math/rand"

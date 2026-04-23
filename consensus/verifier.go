@@ -3,7 +3,7 @@
 
 package consensus
 
-import "arachnet-bft/types"
+import "klef/types"
 
 type Verifier struct {
 	PublicKeyMap map[int]types.PublicKey // 노드 ID별 공개키 저장

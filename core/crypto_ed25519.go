@@ -20,7 +20,7 @@ Note:
 package core
 
 import (
-	"arachnet-bft/types"
+	"klef/types"
 	"crypto/ed25519"
 	"fmt"
 )

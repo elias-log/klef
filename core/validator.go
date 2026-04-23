@@ -17,10 +17,10 @@ Design note:
 package core
 
 import (
-	"arachnet-bft/config"
-	"arachnet-bft/consensus"
-	"arachnet-bft/core/validation"
-	"arachnet-bft/types"
+	"klef/config"
+	"klef/consensus"
+	"klef/core/validation"
+	"klef/types"
 	"context"
 	"fmt"
 	"sync"

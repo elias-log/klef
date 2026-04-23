@@ -19,8 +19,8 @@ Note:
 package core
 
 import (
-	"arachnet-bft/config"
-	"arachnet-bft/types"
+	"klef/config"
+	"klef/types"
 	"fmt"
 	"sync"
 	"time"

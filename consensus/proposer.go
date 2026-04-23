@@ -57,8 +57,8 @@
 package consensus
 
 import (
-	"arachnet-bft/network"
-	"arachnet-bft/types"
+	"klef/network"
+	"klef/types"
 	"sync"
 	"time"
 )
