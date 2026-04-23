@@ -36,18 +36,18 @@ import (
 
 /// SyncFetcher defines the interface for triggering external data retrieval.
 type SyncFetcher interface {
-	StartSync(missingHashes []string, suspectID int)
+	StartSync(missingHashes []types.Hash, suspectID int)
 }
 
 /// DAG manages the causal history of vertices and their quorum-based finality.
 type DAG struct {
 	mu         sync.RWMutex
-	Vertices   map[string]*types.Vertex // Global registry: Hash -> Vertex
-	RoundIndex map[int][]string         // Round-based lookup: Round -> []Hashes
-	Buffer     *Orphanage               // Buffer for vertices with missing causal links
-	Slasher    *Slasher                 // Penalizes protocol violations
-	Fetcher    SyncFetcher              // Triggers sync for missing ancestors
-	Config     *config.Config           // Protocol parameters
+	Vertices   map[types.Hash]*types.Vertex // Global registry: Hash -> Vertex
+	RoundIndex map[int][]types.Hash         // Round-based lookup: Round -> []Hashes
+	Buffer     *Orphanage                   // Buffer for vertices with missing causal links
+	Slasher    *Slasher                     // Penalizes protocol violations
+	Fetcher    SyncFetcher                  // Triggers sync for missing ancestors
+	Config     *config.Config               // Protocol parameters
 }
 
 /// NewDAG initializes the DAG engine and its associated orphan buffer.
@@ -55,8 +55,8 @@ func NewDAG(fetcher SyncFetcher, slasher *Slasher, cfg *config.Config) *DAG {
 	orphanage := NewOrphanage(cfg.DAG.OrphanCapacity)
 
 	return &DAG{
-		Vertices:   make(map[string]*types.Vertex),
-		RoundIndex: make(map[int][]string),
+		Vertices:   make(map[types.Hash]*types.Vertex),
+		RoundIndex: make(map[int][]types.Hash),
 		Buffer:     orphanage,
 		Slasher:    slasher,
 		Fetcher:    fetcher,
@@ -108,7 +108,7 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 	// Phase 4: Orphan Handling & Sync Trigger.
 	if len(missing) > 0 {
-		fmt.Printf("[DEBUG] DAG: Vertex %s stored in Orphanage (Missing: %d)\n", vtx.Hash[:8], len(missing))
+		fmt.Printf("[DEBUG] DAG: Vertex %s stored in Orphanage (Missing: %d)\n", vtx.Hash.String()[:8], len(missing))
 		d.Buffer.AddOrphan(vtx, missing)
 
 		// Sync logic: Triggered if the vertex round is significantly ahead.
@@ -153,12 +153,12 @@ func (d *DAG) processInsertionLocked(initialVtx *types.Vertex) {
 		if len(readyChildren) > 0 {
 			// Deterministic Sort: Essential for maintaining identical DAG traversal across nodes.
 			sort.Slice(readyChildren, func(i, j int) bool {
-				return readyChildren[i].Hash < readyChildren[j].Hash
+				return readyChildren[i].Hash.Compare(readyChildren[j].Hash) < 0
 			})
 			worklist = append(worklist, readyChildren...)
 		}
 
-		fmt.Printf("[DEBUG] DAG: Vertex %s committed (Round %d)\n", vtx.Hash[:8], vtx.Round)
+		fmt.Printf("[DEBUG] DAG: Vertex %s committed\n", vtx.Hash.String()[:8])
 	}
 	// Phase 6: Canonical Index Normalization.
 	// Only sort the affected rounds to maintain performance.
@@ -169,14 +169,14 @@ func (d *DAG) processInsertionLocked(initialVtx *types.Vertex) {
 	sort.Ints(rounds)
 
 	for _, r := range rounds {
-		sort.Strings(d.RoundIndex[r])
+		types.SortHashes(d.RoundIndex[r])
 	}
 }
 
 /// getMissingHashesLocked identifies ancestors not yet present in the DAG.
 // Must be called while holding DAG.mu.
-func (d *DAG) getMissingHashesLocked(hashes []string) []string {
-	var missing []string
+func (d *DAG) getMissingHashesLocked(hashes []types.Hash) []types.Hash {
+	var missing []types.Hash
 	for _, h := range hashes {
 		if _, exists := d.Vertices[h]; !exists {
 			missing = append(missing, h)
@@ -186,11 +186,11 @@ func (d *DAG) getMissingHashesLocked(hashes []string) []string {
 }
 
 /// GetVertex retrieves a vertex by its unique hash identifier.
-func (d *DAG) GetMissingHashes(hashes []string) []string {
+func (d *DAG) GetMissingHashes(hashes []types.Hash) []types.Hash {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	var missing []string
+	var missing []types.Hash
 	for _, h := range hashes {
 		if _, exists := d.Vertices[h]; !exists {
 			missing = append(missing, h)
@@ -200,7 +200,7 @@ func (d *DAG) GetMissingHashes(hashes []string) []string {
 }
 
 /// GetVerticesByRound returns all vertices committed at a specific logical height.
-func (d *DAG) GetVertex(hash string) *types.Vertex {
+func (d *DAG) GetVertex(hash types.Hash) *types.Vertex {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.Vertices[hash]
@@ -242,7 +242,7 @@ func (d *DAG) GetTips() []*types.Vertex {
 	}
 
 	// 1. Map all existing parent references.
-	hasChild := make(map[string]bool)
+	hasChild := make(map[types.Hash]bool)
 	for _, vtx := range d.Vertices {
 		for _, parentHash := range vtx.Parents {
 			hasChild[parentHash] = true

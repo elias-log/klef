@@ -5,7 +5,7 @@ package types
 
 type Vote struct {
 	Round      int
-	VertexHash string
+	VertexHash Hash
 	VoterID    int
-	Signature  []byte
+	Signature  Signature
 }

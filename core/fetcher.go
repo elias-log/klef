@@ -35,8 +35,9 @@ Note:
 package core
 
 import (
-	"klef/types"
+	"context"
 	"fmt"
+	"klef/types"
 	"time"
 )
 
@@ -48,15 +49,9 @@ type VertexFetcher struct {
 
 /// StartSync initiates an asynchronous retrieval process for a set of missing hashes.
 /// It uses a tiered escalation approach to minimize network overhead.
-func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
+func (f *VertexFetcher) StartSync(missingHashes []types.Hash, suspectID int) {
 	// 1. Filter using PendingManager to prevent redundant concurrent fetches.
-	filtered := make([]string, 0)
-	for _, h := range missingHashes {
-		if !f.Validator.pendingMgr.IsPending(h) {
-			f.Validator.pendingMgr.Add(h)
-			filtered = append(filtered, h)
-		}
-	}
+	filtered := f.filterNewRequests(missingHashes)
 	if len(filtered) == 0 {
 		return
 	}
@@ -64,11 +59,8 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 	// 2. Spawn a dedicated worker goroutine for this batch.
 	go func() {
 		currentMissing := filtered
-		timer := time.NewTimer(time.Hour)
-		if !timer.Stop() {
-			<-timer.C
-		} // Initialize in stopped state
-		defer timer.Stop()
+		ctx, cancel := context.WithCancel(f.Validator.ctx)
+		defer cancel()
 
 		for step := 1; step <= 3; step++ {
 			// Pre-dispatch check: Has the data arrived via other channels?
@@ -79,46 +71,29 @@ func (f *VertexFetcher) StartSync(missingHashes []string, suspectID int) {
 
 			// Dispatch fetch requests based on the current escalation tier.
 			f.dispatchByStep(step, suspectID, currentMissing)
-			// [Safety] Drain timer channel before reset to prevent premature firing.
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(f.getStepTimeout(step))
-
-		waitLoop:
-			for {
-				select {
-				case <-f.InboundResponse:
-					// Upon arrival, re-verify what is still missing.
-					currentMissing = f.Validator.DAG.GetMissingHashes(currentMissing)
-					if len(currentMissing) == 0 {
-						return
-					}
-
-				case <-timer.C:
-					// Timeout reached; escalate to the next tier of peers.
-					break waitLoop
-
-				case <-f.Validator.ctx.Done():
+			select {
+			case <-time.After(f.getStepTimeout(step)):
+				continue
+			case <-f.notifyOnArrival(currentMissing):
+				currentMissing = f.Validator.DAG.GetMissingHashes(currentMissing)
+				if len(currentMissing) == 0 {
 					return
 				}
+			case <-ctx.Done():
+				return
 			}
 		}
-
-		// Step 4: Final verification and Failure Reporting (Data Availability Failure).
+		// Final verification and Failure Reporting (Data Availability Failure).
 		// TODO: Unified policy for data availability (DA) failures (e.g., slashing or cold storage).
-		finalMissing := f.Validator.DAG.GetMissingHashes(currentMissing)
-		if len(finalMissing) > 0 {
-			f.handlePanic(finalMissing)
+		if finalMissing := f.Validator.DAG.GetMissingHashes(currentMissing); len(finalMissing) > 0 {
+			f.handleDAFailure(finalMissing)
 		}
+
 	}()
 }
 
 /// dispatchByStep maps the escalation step to specific peer target groups.
-func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []string) {
+func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []types.Hash) {
 	switch step {
 	case 1:
 		f.dispatchFetch([]int{suspectID}, hashes)
@@ -145,7 +120,7 @@ func (f *VertexFetcher) getFilteredNeighbors(count int, suspectID int) []int {
 }
 
 /// dispatchFetch sends point-to-point fetch requests.
-func (f *VertexFetcher) dispatchFetch(peerIDs []int, hashes []string) {
+func (f *VertexFetcher) dispatchFetch(peerIDs []int, hashes []types.Hash) {
 	if len(peerIDs) == 0 || len(hashes) == 0 {
 		return
 	}
@@ -172,9 +147,37 @@ func (f *VertexFetcher) getStepTimeout(step int) time.Duration {
 	}
 }
 
-/// handlePanic handles scenarios where data remains unavailable after full broadcast.
-func (f *VertexFetcher) handlePanic(hashes []string) {
-	// TODO(Safety): This indicates a potential data withholding attack or network partition.
-	// Future: Downgrade 'Suspect' reputation and alert the Orchestrator.
-	fmt.Printf("[CRITICAL] Data missing after full network broadcast: %v\n", hashes)
+/// filterNewRequests uses PendingManager to deduplicate concurrent fetch attempts.
+/// It registers missing hashes and returns only those that are not already in-flight.
+func (f *VertexFetcher) filterNewRequests(hashes []types.Hash) []types.Hash {
+	filtered := make([]types.Hash, 0)
+	for _, h := range hashes {
+		// Atomic Check-and-Set: only append if Add() succeeds (i.e., not already pending).
+		if f.Validator.pendingMgr.Add(h) {
+			filtered = append(filtered, h)
+		}
+	}
+	return filtered
+}
+
+/// notifyOnArrival returns a signaling channel that triggers when any of the
+/// specified hashes are received. This enables event-driven convergence
+/// and eliminates unnecessary polling latency.
+func (f *VertexFetcher) notifyOnArrival(hashes []types.Hash) <-chan struct{} {
+	return f.Validator.pendingMgr.Watch(hashes)
+}
+
+/// handleDAFailure manages scenarios where data remains unavailable after full escalation.
+/// It clears the pending state and logs a critical Data Availability (DA) failure.
+func (f *VertexFetcher) handleDAFailure(hashes []types.Hash) {
+	// 1. Release pending state to allow future retry attempts if necessary.
+	for _, h := range hashes {
+		f.Validator.pendingMgr.Remove(h)
+	}
+
+	// 2. Critical Observation: This state suggests a Data Withholding Attack
+	// or a severe network partition.
+	// TODO (Phase 2): Integrate with Slasher to penalize the 'Suspect' peer.
+	fmt.Printf("[CRITICAL] DA Failure! Data withheld for %d hashes. Sample: %s\n",
+		len(hashes), hashes[0].String()[:8])
 }

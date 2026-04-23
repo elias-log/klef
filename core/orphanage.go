@@ -45,32 +45,31 @@ package core
 
 import (
 	"klef/types"
-	"sort"
 	"sync"
 )
 
 /// Orphanage acts as a temporary buffer for vertices awaiting their ancestors.
 type Orphanage struct {
 	mu              sync.Mutex
-	lostParents     map[string][]*types.Vertex // ParentHash -> Waiting Children
-	lostParentCount map[string]int             // ChildHash -> Number of missing parents
-	orphans         map[string]*types.Vertex   // ChildHash -> Vertex Object
-	capacity        int                        // Maximum number of orphans allowed
+	lostParents     map[types.Hash][]*types.Vertex // ParentHash -> Waiting Children
+	lostParentCount map[types.Hash]int             // ChildHash -> Number of missing parents
+	orphans         map[types.Hash]*types.Vertex   // ChildHash -> Vertex Object
+	capacity        int                            // Maximum number of orphans allowed
 }
 
 /// NewOrphanage initializes a buffer with a fixed capacity to prevent memory exhaustion.
 func NewOrphanage(limit int) *Orphanage {
 	return &Orphanage{
-		lostParents:     make(map[string][]*types.Vertex),
-		lostParentCount: make(map[string]int),
-		orphans:         make(map[string]*types.Vertex),
+		lostParents:     make(map[types.Hash][]*types.Vertex),
+		lostParentCount: make(map[types.Hash]int),
+		orphans:         make(map[types.Hash]*types.Vertex),
 		capacity:        limit,
 	}
 }
 
 /// AddOrphan registers a vertex in the buffer. If capacity is exceeded,
 /// it deterministically evicts a 'victim' based on the missing parent count.
-func (b *Orphanage) AddOrphan(vtx *types.Vertex, missingParents []string) {
+func (b *Orphanage) AddOrphan(vtx *types.Vertex, missingParents []types.Hash) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -102,7 +101,7 @@ func (b *Orphanage) AddOrphan(vtx *types.Vertex, missingParents []string) {
 // - Prefer evicting vertices with higher missing parent count
 //   (lower likelihood of near-term resolution)
 // - Break ties deterministically via lexicographic hash ordering
-func (b *Orphanage) findVictim(candidateHash string, candidateMissingCount int) string {
+func (b *Orphanage) findVictim(candidateHash types.Hash, candidateMissingCount int) types.Hash {
 	// Include the incoming candidate in eviction comparison.
 	// This ensures that insertion is rejected if it is less favorable than existing entries.
 	victimHash := candidateHash
@@ -115,7 +114,7 @@ func (b *Orphanage) findVictim(candidateHash string, candidateMissingCount int) 
 			maxMissing = count
 		} else if count == maxMissing {
 			// 2. Larger hash (lexicographical tie-break).
-			if h > victimHash {
+			if h.Compare(victimHash) > 0 {
 				victimHash = h
 			}
 		}
@@ -125,7 +124,7 @@ func (b *Orphanage) findVictim(candidateHash string, candidateMissingCount int) 
 
 /// OnParentArrival resolves causal dependencies for children waiting on pHash.
 /// Returns a deterministically sorted list of vertices ready for DAG integration.
-func (b *Orphanage) OnParentArrival(pHash string) []*types.Vertex {
+func (b *Orphanage) OnParentArrival(pHash types.Hash) []*types.Vertex {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -137,9 +136,7 @@ func (b *Orphanage) OnParentArrival(pHash string) []*types.Vertex {
 	// Canonical Sort:
 	// Required because insertion order into lostParents is non-deterministic
 	// across nodes (depends on message arrival timing).
-	sort.Slice(children, func(i, j int) bool {
-		return children[i].Hash < children[j].Hash
-	})
+	types.SortVertices(children)
 
 	var readyChildren []*types.Vertex
 	for _, child := range children {
@@ -159,9 +156,7 @@ func (b *Orphanage) OnParentArrival(pHash string) []*types.Vertex {
 	}
 
 	// Double-sorting for the output to ensure deterministic DAG insertion order.
-	sort.Slice(readyChildren, func(i, j int) bool {
-		return readyChildren[i].Hash < readyChildren[j].Hash
-	})
+	types.SortVertices(readyChildren)
 
 	// Safe to delete:
 	// This parent dependency has been fully resolved for all waiting children.
@@ -173,7 +168,7 @@ func (b *Orphanage) OnParentArrival(pHash string) []*types.Vertex {
 // NOTE:
 // This is O(n) per parent. Acceptable for current scale.
 // Future optimization: index children by hash for O(1) removal.
-func (b *Orphanage) removeOrphan(hash string) {
+func (b *Orphanage) removeOrphan(hash types.Hash) {
 	vtx, exists := b.orphans[hash]
 	if !exists {
 		return
@@ -197,7 +192,7 @@ func (b *Orphanage) removeOrphan(hash string) {
 	delete(b.orphans, hash)
 }
 
-func (b *Orphanage) GetOrphan(hash string) *types.Vertex {
+func (b *Orphanage) GetOrphan(hash types.Hash) *types.Vertex {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.orphans[hash]

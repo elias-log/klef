@@ -28,10 +28,11 @@ Note:
 package core
 
 import (
-	"klef/config"
-	"klef/internal/ds"
 	"container/heap"
 	"context"
+	"klef/config"
+	"klef/internal/ds"
+	"klef/types"
 	"math/rand"
 	"sync"
 	"time"
@@ -44,7 +45,7 @@ const (
 
 /// PendingItem represents a request entry within the Priority Queue.
 type PendingItem struct {
-	Hash        string
+	Hash        types.Hash
 	RequestTime time.Time
 	ExpiryTime  time.Time
 	index       int
@@ -60,8 +61,9 @@ type PendingMeta struct {
 /// PendingManager coordinates the timing and persistence of pending data fetches.
 type PendingManager struct {
 	mu              sync.RWMutex
-	pendingRequests map[string]PendingMeta
+	pendingRequests map[types.Hash]PendingMeta
 	pendingQueue    ds.PriorityQueue
+	watchers        map[types.Hash][]chan struct{} // waiting channels(workers) per hash
 	cfg             *config.Config
 	rng             *rand.Rand
 }
@@ -69,15 +71,16 @@ type PendingManager struct {
 /// NewPendingManager initializes a manager with a locally seeded PRNG.
 func NewPendingManager(cfg *config.Config) *PendingManager {
 	return &PendingManager{
-		pendingRequests: make(map[string]PendingMeta),
+		pendingRequests: make(map[types.Hash]PendingMeta),
 		pendingQueue:    make(ds.PriorityQueue, 0),
+		watchers:        make(map[types.Hash][]chan struct{}),
 		cfg:             cfg,
 		rng:             rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
 /// Add registers a new fetch request or updates an existing one with incremented backoff.
-func (pm *PendingManager) Add(hash string) {
+func (pm *PendingManager) Add(hash types.Hash) bool {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -86,7 +89,7 @@ func (pm *PendingManager) Add(hash string) {
 
 	// 1. Redundancy Guard: Ignore if an active request for the same hash is still valid.
 	if exists && now.Before(meta.ExpiryTime) {
-		return
+		return false
 	}
 
 	// 2. Backoff Calculation: Exponentially increase wait time up to 15 retries.
@@ -104,7 +107,7 @@ func (pm *PendingManager) Add(hash string) {
 
 	// 3. Jitter Injection: Local RNG usage prevents global seed contention.
 	jitter := time.Duration(0)
-	if backoff > 0 {
+	if backoff >= 5 {
 		jitter = time.Duration(pm.rng.Int63n(int64(backoff / 5)))
 	}
 
@@ -122,18 +125,55 @@ func (pm *PendingManager) Add(hash string) {
 		RequestTime: now,
 		ExpiryTime:  expiry,
 	})
+
+	return true
 }
 
-/// Remove purges a hash from the active tracking map.
-/// Causal cleanup in the Priority Queue will be handled lazily by the background loop.
-func (pm *PendingManager) Remove(hash string) {
+/// Watch returns a channel that signals when any of the provided hashes
+/// are resolved (i.e., Remove is called).
+func (pm *PendingManager) Watch(hashes []types.Hash) <-chan struct{} {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
+
+	// Buffered channel to prevent blocking the producer (Remove).
+	// A buffer of 1 is sufficient as the worker only needs the "event" signal.
+	ch := make(chan struct{}, 1)
+
+	// Register this channel for every hash in the batch.
+	// Optimization: If the hash is already missing (not in pendingRequests),
+	// we could trigger the channel immediately.
+	for _, h := range hashes {
+		pm.watchers[h] = append(pm.watchers[h], ch)
+	}
+
+	return ch
+}
+
+/// Remove purges a hash from tracking and notifies all registered watchers.
+func (pm *PendingManager) Remove(hash types.Hash) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// 1. Clear from tracking maps.
 	delete(pm.pendingRequests, hash)
+
+	// 2. Notify and cleanup watchers for this specific hash.
+	if channels, exists := pm.watchers[hash]; exists {
+		for _, ch := range channels {
+			select {
+			case ch <- struct{}{}:
+				// Signal sent successfully.
+			default:
+				// Channel already has a pending signal.
+			}
+		}
+		// Cleanup to prevent memory leaks.
+		delete(pm.watchers, hash)
+	}
 }
 
 /// IsPending checks if a hash is currently awaiting a response within its valid window.
-func (pm *PendingManager) IsPending(hash string) bool {
+func (pm *PendingManager) IsPending(hash types.Hash) bool {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	meta, exists := pm.pendingRequests[hash]

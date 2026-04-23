@@ -8,5 +8,5 @@ import "klef/types"
 /// MessageValidator defines the universal interface for all protocol message validation logic.
 type MessageValidator interface {
 	// Validate checks the consistency and authenticity of a message against the current system state.
-	Validate(msg *types.Message, ctx types.StateReader) error
+	Validate(msg *types.Message, ctx types.ConsensusContext) error
 }

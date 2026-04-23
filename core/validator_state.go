@@ -27,13 +27,13 @@ func (v *Validator) GetCurrentRound() int {
 }
 
 /// IsKnownVertex checks the local DAG storage for the existence of a specific hash.
-func (v *Validator) IsKnownVertex(hash string) bool {
+func (v *Validator) IsKnownVertex(hash types.Hash) bool {
 	return v.DAG.GetVertex(hash) != nil
 }
 
 /// Sign generates a cryptographic signature for the provided data using the node's private key.
-func (v *Validator) Sign(data string) types.Signature {
-	return v.Signer.Sign([]byte(data))
+func (v *Validator) Sign(data []byte) types.Signature {
+	return v.Signer.Sign(data)
 }
 
 /// GetQuorumPolicy retrieves the current consensus rules for threshold calculation.
@@ -86,6 +86,6 @@ func (v *Validator) UpdateAndCheckRateLimit(peerID int) bool {
 /// in the globally deterministic outcome.
 /// Note: Finality is derived from DAG anchoring, not local observation.
 // TODO(Finality): Integrate with the Finalizer's anchor-tracking logic in Phase 8.
-func (v *Validator) IsFinalized(hash string) bool {
+func (v *Validator) IsFinalized(hash types.Hash) bool {
 	return false
 }

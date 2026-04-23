@@ -32,7 +32,7 @@ type FetchRequestValidator struct {
 
 /// Validate scrutinizes an incoming FetchRequest to ensure it conforms to protocol constraints.
 /// It primarily serves as a resource-protection layer against Malformed requests and DoS attempts.
-func (f *FetchRequestValidator) Validate(msg *types.Message, ctx types.StateReader) error {
+func (f *FetchRequestValidator) Validate(msg *types.Message, ctx types.ConsensusContext) error {
 
 	if msg.FetchReq == nil {
 		return errors.New("message does not contain a FetchRequest")
@@ -58,7 +58,7 @@ type FetchResponseValidator struct {
 }
 
 /// Validate scrutinizes a FetchResponse message containing multiple vertices.
-func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.StateReader) error {
+func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.ConsensusContext) error {
 	if msg.FetchRes == nil {
 		return errors.New("message does not contain a FetchResponse")
 	}
@@ -85,7 +85,7 @@ func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.StateRea
 		// This handles edge cases where requests expired due to network latency
 		// without invalidating the entire response.
 		if !ctx.IsRequestPending(vtx.Hash) {
-			fmt.Printf("[DEBUG] Unsolicited vertex skipped: %s\n", vtx.Hash[:8])
+			fmt.Printf("[DEBUG] Unsolicited vertex skipped: %x\n", vtx.Hash[:4])
 			continue
 		}
 
@@ -144,7 +144,7 @@ func (f *FetchResponseValidator) validateStructure(vtx *types.Vertex) error {
 		return fmt.Errorf("non-genesis vertex %s has no parents", vtx.Hash)
 	}
 
-	parentSet := make(map[string]struct{})
+	parentSet := make(map[types.Hash]struct{})
 	for _, pHash := range vtx.Parents {
 		if pHash == vtx.Hash {
 			return fmt.Errorf("circular reference in vertex %s", vtx.Hash)

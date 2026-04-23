@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 elias-log
 
-//물리적인 통신 수단(채널, TCP, UDP 등)을 추상화
+// transport.go abstracts physical communication layers (Channels, TCP, UDP, etc.)
 
 package network
 
-// Sender 인터페이스: 어디로든 보낼 수 있다는 약속일세.
+/// Sender defines a contract for transmitting data to a destination.
+/// This abstraction allows the system to remain agnostic of the underlying network protocol.
 type Sender interface {
 	Send(msg interface{}) error
 }
 
-// LocalSender: 고루틴 간 채널 통신용 (시뮬레이션용)
+/// LocalSender implements the Sender interface using Go channels.
+/// Primarily used for local simulations and inter-goroutine communication.
 type LocalSender struct {
 	TargetChan chan interface{}
 }
 
+/// Send dispatches a message into the target channel.
 func (s *LocalSender) Send(msg interface{}) error {
 	s.TargetChan <- msg
 	return nil

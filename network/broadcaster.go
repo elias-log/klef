@@ -4,42 +4,47 @@
 package network
 
 import (
-	"klef/types"
 	"fmt"
+	"klef/types"
 )
 
+/// Broadcaster defines the interface for message propagation across the network.
 type Broadcaster interface {
-	// Broadcast: 전체 방송 (Gossip 등)
+	// Broadcast propagates a message to all connected peers, typically via a Gossip protocol.
 	Broadcast(msgType types.MessageType, payload interface{})
 
-	// Multicast: 특정 커미티에게만 쏘는 Multicast
+	// Multicast targets a specific subset of validators, such as a consensus committee.
 	Multicast(committee []int, msgType types.MessageType, payload interface{})
 
-	// SendTo: 특정 노드에게만 귓속말 (FetchRes 등)
+	// SendTo performs a direct unicast to a specific node (e.g., replying to a FetchRequest).
 	SendTo(targetID int, msgType types.MessageType, payload interface{})
 }
 
-// NetworkManager: 실제 Broadcaster 인터페이스를 구현할 목업 객체일세.
-// 지금은 출력만 하지만, 나중에 P2P 로직을 채울 걸세.
+/// NetworkManager provides a concrete implementation of the Broadcaster interface.
+/// Currently functions as a mock for local testing, with P2P logic to be integrated later.
 type NetworkManager struct {
 	SelfID int
 }
 
+/// NewNetworkManager initializes a new manager with the given node ID.
 func NewNetworkManager(id int) *NetworkManager {
 	return &NetworkManager{SelfID: id}
 }
 
+/// Broadcast simulates network-wide propagation.
 func (n *NetworkManager) Broadcast(msgType types.MessageType, payload interface{}) {
-	// TODO: Gossip 프로토콜 연동
+	// TODO: Integrate with a Gossip protocol (e.g., Epidemic broadcast).
 	fmt.Printf("[Network] Node %d: Broadcasting %v\n", n.SelfID, msgType)
 }
 
+/// Multicast simulates sending messages to a specific committee.
 func (n *NetworkManager) Multicast(committee []int, msgType types.MessageType, payload interface{}) {
-	// TODO: 커미티 필터링 전송
+	// TODO: Implement committee-based filtering and propagation.
 	fmt.Printf("[Network] Node %d: Multicasting %v to %v\n", n.SelfID, msgType, committee)
 }
 
+/// SendTo simulates a point-to-point unicast message.
 func (n *NetworkManager) SendTo(targetID int, msgType types.MessageType, payload interface{}) {
-	// TODO: 특정 피어 Unicast
+	// TODO: Implement direct peer connection handling.
 	fmt.Printf("[Network] Node %d: Sending %v to %d\n", n.SelfID, msgType, targetID)
 }

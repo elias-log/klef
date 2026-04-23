@@ -6,14 +6,14 @@ package network
 /*
    [TODO: Performance & Reliability Refinement]
 
-   1. Chunking (청크 분할):
-      - 현재 FetchResponse는 모든 Vertex를 하나의 메시지에 담고 있음.
-      - 대규모 DAG에서 수백 개의 부모를 전송할 경우 패킷 크기 초과(MTU issue) 위험.
-      - MaxPayloadSize(예: 1MB)를 설정하여 초과 시 Response1, Response2로 나누어 전송할 것.
+   1. Chunking (Message Segmentation):
+      - Currently, FetchResponse bundles all requested vertices into a single message.
+      - Large-scale DAGs with hundreds of dependencies risk exceeding the Maximum Transmission Unit (MTU).
+      - We must implement a MaxPayloadSize (e.g., 1MB) and split oversized responses into multiple segments.
 
-   2. Prioritization (우선순위):
-      - Fetch 요청이 폭주할 경우 최신 라운드(CurrentRound - 1)의 부모부터 우선 전송.
-      - 오래된 라운드 데이터는 전송 우선순위를 낮추어 대역폭 최적화 필요.
+   2. Prioritization (Bandwidth Optimization):
+      - During high-traffic fetch scenarios, prioritize vertices from recent rounds (CurrentRound - 1).
+      - Lower the transmission priority for historical data to ensure the tip of the DAG remains synchronized.
 */
 
 import (
@@ -21,7 +21,7 @@ import (
 	"encoding/gob"
 )
 
-// Encode: 객체->바이트
+/// Encode serializes a generic object into a byte slice using the GOB format.
 func Encode(msg interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -31,7 +31,7 @@ func Encode(msg interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Decode: 바이트->객체
+/// Decode deserializes a byte slice back into the provided target object.
 func Decode(data []byte, target interface{}) error {
 	buf := bytes.NewBuffer(data)
 	dec := gob.NewDecoder(buf)

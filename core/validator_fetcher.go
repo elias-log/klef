@@ -16,22 +16,24 @@ Note:
 
 package core
 
+import "klef/types"
+
 /// IsRequestPending checks if a specific vertex hash is currently under
 /// active retrieval from the network.
 /// Used to avoid duplicate network requests and reduce redundant traffic.
-func (v *Validator) IsRequestPending(hash string) bool {
+func (v *Validator) IsRequestPending(hash types.Hash) bool {
 	return v.pendingMgr.IsPending(hash)
 }
 
 /// AddPendingRequest registers a hash into the tracking ledger to monitor its
 /// synchronization status.
 /// Assumes idempotent behavior; duplicate insertions should be safely ignored by PendingManager.
-func (v *Validator) AddPendingRequest(hash string) {
+func (v *Validator) AddPendingRequest(hash types.Hash) {
 	v.pendingMgr.Add(hash)
 }
 
 /// RemovePendingRequest marks the completion of a fetch lifecycle,
 /// typically after successful DAG integration.
-func (v *Validator) RemovePendingRequest(hash string) {
+func (v *Validator) RemovePendingRequest(hash types.Hash) {
 	v.pendingMgr.Remove(hash)
 }

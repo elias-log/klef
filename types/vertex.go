@@ -23,7 +23,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"sort"
 )
@@ -40,27 +39,27 @@ const (
 /// has acknowledged a specific Vertex at a given Round.
 type QC struct {
 	Type       QCType
-	VertexHash string
+	VertexHash Hash
 	Round      int
-	ProposerID int            // Node ID that aggregated this QC
-	Signatures map[int][]byte // Mapping of NodeID to its ECDSA/Ed25519 signature
+	ProposerID int               // Node ID that aggregated this QC
+	Signatures map[int]Signature // Mapping of NodeID to its ECDSA/Ed25519 signature
 }
 
 /// Vertex is the fundamental block of the DAG, containing transactions and proofs.
 type Vertex struct {
-	Author    int      // ID of the validator who created this vertex
-	Round     int      // Logical clock/height in the DAG
-	Parents   []string // List of parent vertex hashes (hex encoded)
-	ParentQCs []*QC    // Quorum Certificates proving the validity of parents
-	Timestamp int64    // Unix timestamp of creation
-	Payload   [][]byte // Batch of transactions in serialized form
-	Signature []byte   // Author's cryptographic signature over the vertex hash
-	Hash      string   // Unique identifier derived via CalculateHash()
+	Author    int       // ID of the validator who created this vertex
+	Round     int       // Logical clock/height in the DAG
+	Parents   []Hash    // List of parent vertex hashes (hex encoded)
+	ParentQCs []*QC     // Quorum Certificates proving the validity of parents
+	Timestamp int64     // Unix timestamp of creation
+	Payload   [][]byte  // Batch of transactions in serialized form
+	Signature Signature // Author's cryptographic signature over the vertex hash
+	Hash      Hash      // Unique identifier derived via CalculateHash()
 }
 
 /// CalculateHash generates a globally consistent SHA-256 hash of the vertex.
 /// It strictly adheres to BigEndian serialization and canonical ordering.
-func (v *Vertex) CalculateHash() string {
+func (v *Vertex) CalculateHash() Hash {
 	buf := new(bytes.Buffer)
 
 	// 1. Author (int32) & Round (int64)
@@ -70,8 +69,9 @@ func (v *Vertex) CalculateHash() string {
 	// 2. Parents: [Count(int32)] + [Hash Strings]
 	binary.Write(buf, binary.BigEndian, int32(len(v.Parents)))
 	for _, pHash := range v.Parents {
-		// Note: Assuming fixed-length hash strings for direct buffering.
-		buf.WriteString(pHash)
+		// Note: Include hash length for future flexibility.
+		binary.Write(buf, binary.BigEndian, int32(len(pHash)))
+		buf.Write(pHash.Bytes())
 	}
 
 	// 3. ParentQCs: [Count(int32)] + [QC Encodings]
@@ -87,7 +87,7 @@ func (v *Vertex) CalculateHash() string {
 
 		// VertexHash with length prefix to prevent ambiguity
 		binary.Write(buf, binary.BigEndian, int32(len(qc.VertexHash)))
-		buf.WriteString(qc.VertexHash)
+		buf.Write(qc.VertexHash.Bytes())
 
 		// Signatures: Sorted by NodeID for determinism
 		ids := make([]int, 0, len(qc.Signatures))
@@ -115,8 +115,8 @@ func (v *Vertex) CalculateHash() string {
 		buf.Write(tx)
 	}
 
-	hash := sha256.Sum256(buf.Bytes())
-	return hex.EncodeToString(hash[:])
+	sum := sha256.Sum256(buf.Bytes())
+	return Hash(sum)
 }
 
 /// Normalize sanitizes the vertex structure by removing duplicate parents
@@ -140,21 +140,25 @@ func (v *Vertex) Normalize() (hadDuplicate bool) {
 /// deduplicateAndSort is an internal helper that returns a unique,
 /// lexicographically sorted slice of strings.
 // This is essential for maintaining a deterministic byte stream during hashing.
-func deduplicateAndSort(in []string) []string {
+func deduplicateAndSort(in []Hash) []Hash {
+	// 1. Edge case: Nothing to sort or deduplicate.
 	if len(in) <= 1 {
-		sort.Strings(in)
 		return in
 	}
 
-	seen := make(map[string]struct{})
-	unique := make([]string, 0, len(in))
-	for _, s := range in {
-		if _, exists := seen[s]; !exists {
-			seen[s] = struct{}{}
-			unique = append(unique, s)
+	// 2. Deduplication using a map.
+	seen := make(map[Hash]struct{})
+	unique := make([]Hash, 0, len(in))
+	for _, h := range in {
+		if _, exists := seen[h]; !exists {
+			seen[h] = struct{}{}
+			unique = append(unique, h)
 		}
 	}
-	sort.Strings(unique)
+
+	// 3. Deterministic Sorting.
+	SortHashes(unique)
+
 	return unique
 }
 
@@ -163,7 +167,7 @@ func deduplicateAndSort(in []string) []string {
 ///
 /// Formal Property:
 /// For any index i, Parents[i] < Parents[i+1] must hold true (Strict Monotonicity).
-func CheckMalformed(parents []string) (bool, string) {
+func CheckMalformed(parents []Hash) (bool, string) {
 	if len(parents) <= 1 {
 		return false, ""
 	}
@@ -175,7 +179,8 @@ func CheckMalformed(parents []string) (bool, string) {
 		}
 		// 2. Canonical Order Verification (Lexicographical)
 		// Any deviation is treated as a protocol violation (Byzantine).
-		if parents[i] > parents[i+1] {
+		// parents[i] > parents[i+1]
+		if parents[i].Compare(parents[i+1]) > 0 {
 			return true, fmt.Sprintf("Unsorted parents: %s comes before %s", parents[i], parents[i+1])
 		}
 	}
@@ -184,8 +189,8 @@ func CheckMalformed(parents []string) (bool, string) {
 
 /// HasDuplicate checks for the existence of any redundant hashes within a slice.
 // Used as a lightweight guardrail in pre-validation stages.
-func HasDuplicate(elements []string) bool {
-	encountered := make(map[string]struct{})
+func HasDuplicate(elements []Hash) bool {
+	encountered := make(map[Hash]struct{})
 	for _, v := range elements {
 		if _, ok := encountered[v]; ok {
 			return true
@@ -193,4 +198,10 @@ func HasDuplicate(elements []string) bool {
 		encountered[v] = struct{}{}
 	}
 	return false
+}
+
+func SortVertices(vtxs []*Vertex) {
+	sort.Slice(vtxs, func(i, j int) bool {
+		return vtxs[i].Hash.Compare(vtxs[j].Hash) < 0
+	})
 }

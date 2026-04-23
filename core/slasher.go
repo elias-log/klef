@@ -19,9 +19,9 @@ Note:
 package core
 
 import (
+	"fmt"
 	"klef/config"
 	"klef/types"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -34,7 +34,7 @@ type Slasher struct {
 	mu           sync.RWMutex
 	evidences    map[int][]types.Evidence // Validator ID -> List of cryptographic proofs
 	penaltyTable map[int]int              // Validator ID -> Accumulated demerit points
-	processedEv  map[string]bool          // Anti-replay: Map of already adjudicated Evidence hashes
+	processedEv  map[types.Hash]bool      // Anti-replay: Map of already adjudicated Evidence hashes
 	Config       *config.Config           // Security policies and penalty thresholds
 }
 
@@ -43,7 +43,7 @@ func NewSlasher(cfg *config.Config) *Slasher {
 	return &Slasher{
 		evidences:    make(map[int][]types.Evidence),
 		penaltyTable: make(map[int]int),
-		processedEv:  make(map[string]bool),
+		processedEv:  make(map[types.Hash]bool),
 		Config:       cfg,
 	}
 }
@@ -54,21 +54,27 @@ func (s *Slasher) HandleEquivocation(vtx1, vtx2 *types.Vertex) *types.Evidence {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	fmt.Printf("[SLASHER] Critical: Equivocation detected by Validator %d (Round: %d)\n", vtx1.Author, vtx1.Round)
-
-	// Apply severe penalty for intentional protocol deviation.
-	s.penaltyTable[vtx1.Author] += s.Config.Security.EquivocationPenalty
-
-	evidence := types.Evidence{
-		TargetID:   vtx1.Author,
-		Type:       types.MsgVertex,
-		Proof1:     vtx1,
-		Proof2:     vtx2,
-		ReporterID: s.Config.NodeID,
+	// Anti-replay check to ensure we don't process the same violation twice.
+	if s.processedEv[vtx1.Hash] {
+		// Return existing evidence if possible, or nil.
+		return nil
 	}
 
-	s.evidences[vtx1.Author] = append(s.evidences[vtx1.Author], evidence)
-	return &evidence
+	fmt.Printf("[SLASHER] Critical: Equivocation detected by Validator %d (Round: %d)\n", vtx1.Author, vtx1.Round)
+
+	// Using internal helper to ensure processedEv and penaltyTable stay in sync.
+	s.executeSlasher(
+		vtx1.Author,
+		s.Config.Security.EquivocationPenalty,
+		vtx1.Hash,
+		types.MsgVertex,
+		vtx1,
+		vtx2,
+		"Local detection: Equivocation (Double Propose/Vote)",
+	)
+
+	evList := s.evidences[vtx1.Author]
+	return &evList[len(evList)-1]
 }
 
 /// ProcessExternalEvidence adjudicates violations reported by other nodes in the network.
@@ -104,7 +110,7 @@ func (s *Slasher) ProcessExternalEvidence(ev *types.Evidence) {
 func (s *Slasher) executeSlasher(
 	target int,
 	amount int,
-	evHash string,
+	evHash types.Hash,
 	evType types.MessageType,
 	p1, p2 *types.Vertex,
 	reason string,

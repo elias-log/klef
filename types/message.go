@@ -6,12 +6,12 @@ package types
 type MessageType uint8
 
 const (
-	MsgVertex         MessageType = iota // 0
-	MsgVote                              // 1
-	MsgFetchReq                          // 2
-	MsgFetchRes                          // 3
-	MsgEvidence                          // 4: 이중 투표 등 일반 고발
-	MsgInvalidPayload                    // 5: 정렬/중복 위반 등 데이터 오류
+	MsgVertex         MessageType = iota // 0: New DAG vertex proposal
+	MsgVote                              // 1: Consensus vote for a specific round
+	MsgFetchReq                          // 2: Request for missing causal data
+	MsgFetchRes                          // 3: Response containing requested vertices
+	MsgEvidence                          // 4: Proof of protocol violation (e.g., Equivocation)
+	MsgInvalidPayload                    // 5: Proof of malformed data (e.g., Duplicate parents)
 )
 
 func (t MessageType) String() string {
@@ -33,13 +33,14 @@ func (t MessageType) String() string {
 	}
 }
 
+/// Message represents the unified envelope for all P2P communication.
 type Message struct {
 	FromID       int
 	CurrentRound int
-	Type         MessageType // MsgVertex, MsgVote 등
-	Signature    []byte
+	Type         MessageType
+	Signature    Signature
 
-	// Payload
+	// Payloads (Mutual Exclusivity handled by Type field)
 	Vote     *Vote
 	Vertex   *Vertex
 	FetchReq *FetchRequest
@@ -47,45 +48,44 @@ type Message struct {
 	Evidence *Evidence
 }
 
-// FetchRequest: "나 이 해시들 좀 알려주게!"
+/// FetchRequest is used to pull missing causal dependencies from peers.
 type FetchRequest struct {
-	MissingHashes []string
+	MissingHashes []Hash
 }
 
-// FetchResponse: 요청받은 Vertex들을 담아 보내는 바구니일세.
+/// FetchResponse acts as a container for bulk vertex retrieval.
 type FetchResponse struct {
 	Vertices []*Vertex
 }
 
 /*
   [Evidence Handling Rules]
-  1. 무결성: 모든 Proof는 해당 Author의 유효한 서명을 포함해야 하네.
-  2. 가벼움: 나중에는 Vertex 전체 대신, (해시 + 서명)만 담아 패킷 크기를 줄이세.
-  3. 전파: 한 번 검증된 증거는 모든 이웃 노드에게 Gossip 프로토콜로 전파하네.
+  1. Integrity: All proofs must contain valid signatures from the accused Author.
+  2. Optimization: Future iterations should use (Hash + Signature) instead of full
+     Vertex objects to minimize bandwidth.
+  3. Propagation: Validated evidence must be broadcasted to all neighbors via Gossip.
 */
-// 범행 증거
-type Evidence struct {
-	TargetID int         // 고발당한 노드의 ID
-	Type     MessageType // 죄목 (예: MsgVertex - 이중 투표 등)
-	Proof1   *Vertex     // 첫 번째 물증 (예: 첫 번째로 생성한 Vertex)
-	Proof2   *Vertex     // 두 번째 물증 (예: 같은 라운드에 생성한 또 다른 Vertex)
 
-	// 이 증거를 처음 발견하고 서명한 신고자 정보
-	ReporterID  int
-	Timestamp   int64  // 신고 시각 (UNIX)
-	Description string // "왜 고발했는가"에 대한 상세 이유
+/// Evidence represents a cryptographic proof of a protocol violation.
+type Evidence struct {
+	TargetID    int         // ID of the validator being accused
+	Type        MessageType // Nature of the violation (e.g., Equivocation or Malformed Payload)
+	Proof1      *Vertex     // Primary piece of evidence
+	Proof2      *Vertex     // Secondary piece of evidence (required for Equivocation)
+	ReporterID  int         // ID of the validator who first detected and reported the violation
+	Timestamp   int64       // Reporting time (UNIX epoch)
+	Description string      // Detailed reasoning for the accusation
 }
 
-// IsValid: 증거가 논리적으로 타당한지 스스로 검사하네.
+/// IsValid performs a self-contained logical validation of the evidence.
 func (e *Evidence) IsValid() bool {
-	if e.Proof1 == nil {
-		return false
-	}
-	if e.Proof1.Author != e.TargetID {
+	// Basic verification: Evidence must have at least one proof and match the target ID.
+	if e.Proof1 == nil || e.Proof1.Author != e.TargetID {
 		return false
 	}
 
-	// Case 1: 이중 투표 (Proof1과 Proof2가 둘 다 있을 때)
+	// Case 1: Equivocation (Double Voting/Proposing)
+	// Requires two different vertices signed by the same author in the same round.
 	if e.Proof2 != nil {
 		if e.Proof1.Author != e.Proof2.Author {
 			return false
@@ -95,7 +95,8 @@ func (e *Evidence) IsValid() bool {
 		}
 	}
 
-	// Case 2: 페이로드 위반 (중복 부모 등 - Proof1만으로 증명 가능!)
+	// Case 2: Payload Violation (e.g., Duplicate or Malformed Parents)
+	// Can be proven using a single vertex payload.
 	if e.Type == MsgInvalidPayload {
 		isMalformed, _ := CheckMalformed(e.Proof1.Parents)
 		return isMalformed
