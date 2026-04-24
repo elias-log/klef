@@ -70,14 +70,14 @@ Ultimately, this system is not designed to be the fastest blockchain in absolute
 State is represented as independent versioned objects.
 
 Transactions:
-- consume specific object versions  
-- produce new versions  
+- consume specific object versions
+- produce new versions
 
 This forms a **dependency graph**, enabling:
 
-- parallel execution of independent transactions  
-- explicit encoding of conflicts  
-- deterministic validation and rollback  
+- parallel execution of independent transactions
+- explicit encoding of conflicts
+- deterministic validation and rollback
 
 ---
 
@@ -88,22 +88,22 @@ The system is built on a global DAG composed of immutable vertices.
 
 Two vertex types exist:
 
-- **DataClaim (DC)** — *"What happened"*  
-  - transaction availability  
-  - validated by **DataQC**  
-  - contains payload + dependencies  
+- **DataClaim (DC)** — *"What happened"*
+  - transaction availability
+  - validated by **DataQC**
+  - contains payload + dependencies
 
-- **ExecClaim (EC)** — *"What it means"*  
-  - execution results  
-  - validated by **ExecQC**  
-  - contains state transitions + validity assertions  
+- **ExecClaim (EC)** — *"What it means"*
+  - execution results
+  - validated by **ExecQC**
+  - contains state transitions + validity assertions
 
 This DAG is a **shared observable memory**, not just storage.
 
 **Key rule:**
-- vertices are immutable  
-- execution never mutates data  
-- all results are append-only  
+- vertices are immutable
+- execution never mutates data
+- all results are append-only
 
 ---
 
@@ -111,23 +111,23 @@ This DAG is a **shared observable memory**, not just storage.
 
 Each shard:
 
-- deterministically executes DataClaims  
-- over its assigned object set  
-- produces ExecClaims  
+- deterministically executes DataClaims
+- over its assigned object set
+- produces ExecClaims
 
 ExecClaims:
-- are not globally final  
-- may conflict  
-- are resolved later   
+- are not globally final
+- may conflict
+- are resolved later
 
 > **Local vs Global Validity**
 >
-> Local committee consensus ensures that an execution claim is  
+> Local committee consensus ensures that an execution claim is
 > well-formed and agreed upon by a Byzantine-resilient quorum.
 >
 > However, it does not guarantee global correctness.
 >
-> Execution validity is determined only through  
+> Execution validity is determined only through
 > deterministic resolution over the global DAG.
 
 ---
@@ -136,14 +136,14 @@ ExecClaims:
 
 Edges encode meaning:
 
-- **DC → DC**: causal dependency  
-- **EC → DC**: execution interpretation  
+- **DC → DC**: causal dependency
+- **EC → DC**: execution interpretation
 
 > ExecClaims are only valid relative to the DataClaims they reference.
 
 **Constraints:**
-- No explicit EC → EC edges  
-- Execution dependencies are implicit via DC structure  
+- No explicit EC → EC edges
+- Execution dependencies are implicit via DC structure
 
 ---
 
@@ -157,9 +157,9 @@ Conflicts are **not resolved by consensus**.
 
 They are resolved deterministically using:
 
-- object version rules  
-- hash-based tie-breaking  
-- dependency propagation  
+- object version rules
+- hash-based tie-breaking
+- dependency propagation
 
 ---
 
@@ -167,8 +167,8 @@ They are resolved deterministically using:
 
 Two levels of finality:
 
-- **Optimistic finality** (QC-based)  
-- **Global finality** (anchoring over DAG)  
+- **Optimistic finality** (QC-based)
+- **Global finality** (anchoring over DAG)
 
 Finality emerges from **deterministic resolution**, not ordering.
 
@@ -176,10 +176,10 @@ Finality emerges from **deterministic resolution**, not ordering.
 
 ### System Properties
 
-- Horizontal scalability (object-level parallelism)  
-- Fault isolation across shards  
-- Partial liveness under failure  
-- Deterministic convergence  
+- Horizontal scalability (object-level parallelism)
+- Fault isolation across shards
+- Partial liveness under failure
+- Deterministic convergence
 
 ---
 
@@ -187,22 +187,67 @@ Finality emerges from **deterministic resolution**, not ordering.
 
 Once published:
 
-- DC and EC are immutable  
-- execution is append-only  
-- vertex hashes never change  
+- DC and EC are immutable
+- execution is append-only
+- vertex hashes never change
 
 This guarantees:
 
-- verifiability  
-- data availability  
-- non-equivocation  
+- verifiability
+- data availability
+- non-equivocation
 
 ---
 
 ### Tradeoffs
 
-- Rollback is inherent (optimistic execution)  
-- State growth must be controlled (fees / pruning)  
+- Rollback is inherent (optimistic execution)
+ 
+---
+
+### State Growth
+
+State size is controlled through economic mechanisms:
+
+- storage fees
+- deletion incentives
+
+State reduction operates at the **object level**,
+by removing or compacting unused object versions.
+
+---
+
+### History Pruning
+
+The DAG stores historical data and execution artifacts.
+
+- Pruning removes **historical vertices**, not live state
+- Safe after anchoring and finalization
+- Does not affect correctness
+
+> Pruning operates on history, not on state.
+
+---
+
+### System Invariants
+
+Klef relies on a small set of structural invariants:
+
+- **Acyclic Dependencies**
+  Dependency edges form a DAG, ensuring finite and deterministic execution and rollback
+
+- **Single Invalidation**
+  Each transaction (or ExecClaim) can be invalidated at most once
+
+- **Immutability**
+  All vertices (DC, EC) are append-only and never modified after publication
+
+- **Deterministic Resolution**
+  Given the same DAG, all nodes converge to the same final state
+
+- **State–History Separation**
+  State is derived from the DAG but managed independently;
+  pruning historical data does not affect correctness
 
 ---
 ## 3. Implementation Waypoints
@@ -240,10 +285,10 @@ Define a deterministic anchoring mechanism to finalize the global state. A snaps
 
 ## 4. Practical Deployment
 
-Klef is designed not as a single-purpose system,  
+Klef is designed not as a single-purpose system,
 but as a **generalized distributed execution engine**.
 
-Its key property is that **trust assumptions are configurable**  
+Its key property is that **trust assumptions are configurable**
 without changing the core architecture.
 
 ---
@@ -271,14 +316,14 @@ of trust models.
 
 In enterprise environments:
 
-- participants are known and controlled  
-- strong Byzantine assumptions are often unnecessary  
+- participants are known and controlled
+- strong Byzantine assumptions are often unnecessary
 
 Klef can leverage this by:
 
-- lowering consensus thresholds  
-- reducing coordination overhead  
-- increasing throughput and lowering latency  
+- lowering consensus thresholds
+- reducing coordination overhead
+- increasing throughput and lowering latency
 
 This transformation requires **no architectural changes** —
 only parameter adjustment.
@@ -289,13 +334,13 @@ only parameter adjustment.
 
 Klef separates:
 
-- **data availability (consensus)**  
-- **execution correctness (deterministic resolution)**  
+- **data availability (consensus)**
+- **execution correctness (deterministic resolution)**
 
 Because correctness is not decided by consensus:
 
-- reducing consensus cost does not break correctness  
-- it only changes the cost and speed of coordination  
+- reducing consensus cost does not break correctness
+- it only changes the cost and speed of coordination
 
 ---
 
@@ -303,8 +348,8 @@ Because correctness is not decided by consensus:
 
 This enables Klef to function as:
 
-> a high-performance distributed database in trusted environments  
-> and a Byzantine-resilient system in adversarial environments  
+> a high-performance distributed database in trusted environments
+> and a Byzantine-resilient system in adversarial environments
 
 — using the same core design.
 
