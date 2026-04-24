@@ -51,7 +51,7 @@ These vertices are of two types:
 - DataClaims (DC), representing transaction availability
 - ExecClaims (EC), representing execution results
 
-Each is validated by distinct quorum certificates (DataQC and ExecQC). This DAG acts not merely as storage, but as a shared observable memory for the entire system. Crucially, the execution of transactions MUST NOT mutate existing vertices; instead, all execution artifacts—including state updates and validity claims—are recorded as separate, immutable DAG nodes. Each shard deterministically executes DataClaims over its assigned object set and produces ExecClaims as verifiable execution results. These claims are not globally final and may conflict. Final truth emerges only after deterministic resolution over the DAG. Other shards asynchronously observe and validate these results. Importantly, validation goes beyond signature verification: nodes must also ensure that referenced object versions are consistent with their local view, enforcing causal validity in addition to cryptographic validity.
+Each is validated by distinct quorum certificates (DataQC and ExecQC). This DAG acts not merely as storage, but as a shared observable memory for the entire system. Crucially, the execution of transactions MUST NOT mutate existing vertices; instead, all execution artifacts—including state updates and validity claims—are recorded as separate, immutable DAG vertices. Each shard deterministically executes DataClaims over its assigned object set and produces ExecClaims as verifiable execution results. These claims are not globally final and may conflict. Final truth emerges only after deterministic resolution over the DAG. Other shards asynchronously observe and validate these results. Importantly, validation goes beyond signature verification: replicas must also ensure that referenced object versions are consistent with their local view, enforcing causal validity in addition to cryptographic validity.
 
 The execution layer consists of sharded committees, each assigned transactions via VRF-based selection. Within each committee, a Jolteon-style BFT protocol is used to quickly produce quorum certificates (QC), providing optimistic confirmation. Users can rely on these QC-backed results for low-latency feedback, but they do not represent final global truth. Finality is achieved through a deterministic anchoring and topological ordering process applied to the global DAG.
 
@@ -59,7 +59,7 @@ A key principle of this system is that it guarantees determinism of outcomes rat
 
 The object-centric model introduces a potential state bloat problem, as fine-grained objects can accumulate rapidly. To address this, the system incorporates economic mechanisms such as storage deposits and deletion rebates, ensuring long-term sustainability of the state size.
 
-Rollback is an inherent feature of the system, not a flaw. It is the cost of enabling optimistic execution prior to global consensus. However, rollbacks are fully deterministic and governed by the DAG and conflict resolution rules, ensuring that all nodes converge to the same final state. The system therefore provides two levels of finality: optimistic (QC-based) and global (anchoring-based).
+Rollback is an inherent feature of the system, not a flaw. It is the cost of enabling optimistic execution prior to global consensus. However, rollbacks are fully deterministic and governed by the DAG and conflict resolution rules, ensuring that all replicas converge to the same final state. The system therefore provides two levels of finality: optimistic (QC-based) and global (anchoring-based).
 
 Ultimately, this system is not designed to be the fastest blockchain in absolute terms. Instead, it is designed to scale with workload by exploiting transaction independence. It provides horizontal scalability, fault isolation, and partial liveness, ensuring that failures in one shard do not propagate across the entire network. Unlike traditional global-state systems, it aims to maintain performance even as system load increases.
 
@@ -243,7 +243,7 @@ Klef relies on a small set of structural invariants:
   All vertices (DC, EC) are append-only and never modified after publication
 
 - **Deterministic Resolution**
-  Given the same DAG, all nodes converge to the same final state
+  Given the same DAG, all replicas converge to the same final state
 
 - **State–History Separation**
   State is derived from the DAG but managed independently;
@@ -255,19 +255,19 @@ Klef relies on a small set of structural invariants:
 This project cannot be implemented in a single step. Instead, it must evolve incrementally under the principle of introducing only one new source of complexity at a time. The ultimate goal is a system combining a data DAG with a sharded Jolteon-based consensus layer, but the initial focus must be on building a deterministic state machine without consensus or sharding.
 
 ### Phase 0: DAG Structure and Synchronization (Done)
-The goal is to construct a DAG with parent references and ensure it can be shared and reconstructed across nodes. At this stage, transactions carry no semantic meaning. Orphan handling must be implemented, buffering nodes whose parents have not yet arrived. The result is a consistent DAG structure across nodes given the same inputs.
+The goal is to construct a DAG with parent references and ensure it can be shared and reconstructed across replicas. At this stage, transactions carry no semantic meaning. Orphan handling must be implemented, buffering vertices whose parents have not yet arrived. The result is a consistent DAG structure across replicas given the same inputs.
 
-### Phase 1: Single-node State Machine (Now)
-Introduce the object model and transaction execution logic. Each object has an ID and version, and transactions consume specific versions to produce new ones. Executing transactions in canonical order must always yield the same state. The result is a fully deterministic execution environment on a single node.
+### Phase 1: Single-replica State Machine (Now)
+Introduce the object model and transaction execution logic. Each object has an ID and version, and transactions consume specific versions to produce new ones. Executing transactions in canonical order must always yield the same state. The result is a fully deterministic execution environment on a single replica.
 
 ### Phase 2: Deterministic Conflict Resolution (Tie-breaking)
-Define rules for resolving conflicts when multiple transactions attempt to consume the same object version. For example, selecting the transaction with the lowest hash. This rule becomes the foundation for consistency across nodes. The result is that identical inputs always lead to identical outcomes, regardless of execution order.
+Define rules for resolving conflicts when multiple transactions attempt to consume the same object version. For example, selecting the transaction with the lowest hash. This rule becomes the foundation for consistency across replicas. The result is that identical inputs always lead to identical outcomes, regardless of execution order.
 
-### Phase 3: Multi-node Deterministic Replay
-Extend the system to multiple nodes. Even if transactions are received in different orders, all nodes must converge to the same state using the DAG and conflict resolution rules. Gossip-based propagation and DAG merging are introduced. The key property validated here is that outcomes are rule-driven, not order-driven.
+### Phase 3: Multi-replica Deterministic Replay
+Extend the system to multiple replicas. Even if transactions are received in different orders, all replicas must converge to the same state using the DAG and conflict resolution rules. Gossip-based propagation and DAG merging are introduced. The key property validated here is that outcomes are rule-driven, not order-driven.
 
 ### Phase 4: Dependency Tracking and Rollback Propagation
-Track dependencies between transactions via the DAG. When a transaction is invalidated, all dependent transactions must also be invalidated. The system must ensure deterministic rollback propagation across all nodes.
+Track dependencies between transactions via the DAG. When a transaction is invalidated, all dependent transactions must also be invalidated. The system must ensure deterministic rollback propagation across all replicas.
 
 ### Phase 5: Single-committee Consensus (Jolteon-lite)
 Introduce a basic consensus mechanism by treating the entire network as a single committee. Implement leader proposal, voting, and QC generation. QC acts as optimistic confirmation and is attached to DAG entries.
@@ -279,7 +279,7 @@ Partition the network into multiple shards, each executing transactions independ
 Enable shards to observe and validate the outputs of other shards via the global DAG. Execution remains local, but validation incorporates global information. Dependency graphs now span across shards.
 
 ### Phase 8: Anchoring and Global Ordering
-Define a deterministic anchoring mechanism to finalize the global state. A snapshot of the DAG is taken, transactions are topologically sorted, and conflicts are resolved globally. The result is a consistent final state across all nodes.
+Define a deterministic anchoring mechanism to finalize the global state. A snapshot of the DAG is taken, transactions are topologically sorted, and conflicts are resolved globally. The result is a consistent final state across all replicas.
 
 ---
 
