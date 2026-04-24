@@ -238,6 +238,78 @@ Define a deterministic anchoring mechanism to finalize the global state. A snaps
 
 ---
 
+## 4. Practical Deployment
+
+Klef is designed not as a single-purpose system,  
+but as a **generalized distributed execution engine**.
+
+Its key property is that **trust assumptions are configurable**  
+without changing the core architecture.
+
+---
+
+### Configurable Trust Model
+
+Klef exposes consensus thresholds as parameters:
+
+- **DataQC (global availability)**
+- **ExecQC (local execution agreement)**
+
+By adjusting these thresholds, the system can operate under
+different environments:
+
+- Public networks (Byzantine-resistant)
+- Consortium systems (partially trusted)
+- Enterprise deployments (trusted infrastructure)
+
+This allows the same system to adapt across a wide spectrum
+of trust models.
+
+---
+
+### Enterprise Optimization
+
+In enterprise environments:
+
+- participants are known and controlled  
+- strong Byzantine assumptions are often unnecessary  
+
+Klef can leverage this by:
+
+- lowering consensus thresholds  
+- reducing coordination overhead  
+- increasing throughput and lowering latency  
+
+This transformation requires **no architectural changes** —
+only parameter adjustment.
+
+---
+
+### Key Insight
+
+Klef separates:
+
+- **data availability (consensus)**  
+- **execution correctness (deterministic resolution)**  
+
+Because correctness is not decided by consensus:
+
+- reducing consensus cost does not break correctness  
+- it only changes the cost and speed of coordination  
+
+---
+
+### Result
+
+This enables Klef to function as:
+
+> a high-performance distributed database in trusted environments  
+> and a Byzantine-resilient system in adversarial environments  
+
+— using the same core design.
+
+---
+
 ## License
 
 This is a learning-focused project. The licensing structure is applied to both follow open-source practices and protect the original design.
