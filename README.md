@@ -1,17 +1,57 @@
+This document outlines the current design direction and key ideas under active exploration.
+
 # Klef
 > Named after Klefki — a key bearer.
 > State is modeled as versioned objects, where conflicts are resolved
 > deterministically through explicit dependencies.
 
-This document outlines the current design direction and key ideas under active exploration.
+---
 
-## 1️. Design Overview
+## 1. Summary
+
+Klef is not a blockchain.
+
+It is a **Byzantine-fault-tolerant distributed database**
+built on a global DAG.
+
+Instead of enforcing a single global order,
+Klef guarantees:
+
+> **Determinism of outcomes, not ordering in time.**
+
+This is achieved by separating:
+
+- **Data availability** (what exists)
+- **Execution semantics** (what it means)
+
+Transactions are not globally ordered.
+They are:
+
+- published as data (DataClaims)
+- interpreted independently (ExecClaims)
+- resolved deterministically later
+
+Consensus is not used to decide *who is right*,
+but only to ensure:
+
+> **the data exists and is shared**
+
+Conflicts are expected,
+and are resolved **algorithmically**, not politically.
+
+## 2. Full Design Overview
 
 This project aims to address two fundamental limitations of existing blockchain systems. First, the reliance on a global state model enforces sequential execution, severely limiting parallelism. Second, systems that adopt optimistic execution for better user experience often sacrifice global consistency. To overcome these issues, this design introduces a hybrid architecture that combines an object-centric state model, a global data DAG (Data Availability & Ordering Layer), and a sharded BFT-based execution layer using Jolteon-style consensus.
 
 State is represented not as a monolithic global store, but as a collection of independent objects, each identified by a unique ID and version. Transactions consume specific versions of objects and produce new ones, forming a versioned dependency graph. This structure allows fine-grained decomposition of state, enabling parallel execution of transactions that do not conflict. When dependencies exist, they are explicitly encoded in the DAG, forming the basis for validation and rollback decisions.
 
-The data layer is implemented as a global DAG where all transactions and consensus proofs (QC) are recorded as event blocks. This DAG acts not merely as storage, but as a shared observable memory for the entire system. Each shard executes transactions independently and produces local consensus proofs, which are then published to the DAG. Other shards asynchronously observe and validate these results. Importantly, validation goes beyond signature verification: nodes must also ensure that referenced object versions are consistent with their local view, enforcing causal validity in addition to cryptographic validity.
+The data layer is implemented as a global DAG composed of immutable vertices. 
+
+These vertices are of two types:
+- DataClaims (DC), representing transaction availability
+- ExecClaims (EC), representing execution results
+
+Each is validated by distinct quorum certificates (DataQC and ExecQC). This DAG acts not merely as storage, but as a shared observable memory for the entire system. Crucially, the execution of transactions MUST NOT mutate existing vertices; instead, all execution artifacts—including state updates and validity claims—are recorded as separate, immutable DAG nodes. Each shard deterministically executes DataClaims over its assigned object set and produces ExecClaims as verifiable execution results. These claims are not globally final and may conflict. Final truth emerges only after deterministic resolution over the DAG. Other shards asynchronously observe and validate these results. Importantly, validation goes beyond signature verification: nodes must also ensure that referenced object versions are consistent with their local view, enforcing causal validity in addition to cryptographic validity.
 
 The execution layer consists of sharded committees, each assigned transactions via VRF-based selection. Within each committee, a Jolteon-style BFT protocol is used to quickly produce quorum certificates (QC), providing optimistic confirmation. Users can rely on these QC-backed results for low-latency feedback, but they do not represent final global truth. Finality is achieved through a deterministic anchoring and topological ordering process applied to the global DAG.
 
@@ -23,10 +63,149 @@ Rollback is an inherent feature of the system, not a flaw. It is the cost of ena
 
 Ultimately, this system is not designed to be the fastest blockchain in absolute terms. Instead, it is designed to scale with workload by exploiting transaction independence. It provides horizontal scalability, fault isolation, and partial liveness, ensuring that failures in one shard do not propagate across the entire network. Unlike traditional global-state systems, it aims to maintain performance even as system load increases.
 
+---
 
+### State Model
+
+State is represented as independent versioned objects.
+
+Transactions:
+- consume specific object versions  
+- produce new versions  
+
+This forms a **dependency graph**, enabling:
+
+- parallel execution of independent transactions  
+- explicit encoding of conflicts  
+- deterministic validation and rollback  
 
 ---
-## 2. Implementation Waypoints
+
+### Data Layer (Global DAG)
+
+
+The system is built on a global DAG composed of immutable vertices.
+
+Two vertex types exist:
+
+- **DataClaim (DC)** — *"What happened"*  
+  - transaction availability  
+  - validated by **DataQC**  
+  - contains payload + dependencies  
+
+- **ExecClaim (EC)** — *"What it means"*  
+  - execution results  
+  - validated by **ExecQC**  
+  - contains state transitions + validity assertions  
+
+This DAG is a **shared observable memory**, not just storage.
+
+**Key rule:**
+- vertices are immutable  
+- execution never mutates data  
+- all results are append-only  
+
+---
+
+### Execution Model
+
+Each shard:
+
+- deterministically executes DataClaims  
+- over its assigned object set  
+- produces ExecClaims  
+
+ExecClaims:
+- are not globally final  
+- may conflict  
+- are resolved later   
+
+> **Local vs Global Validity**
+>
+> Local committee consensus ensures that an execution claim is  
+> well-formed and agreed upon by a Byzantine-resilient quorum.
+>
+> However, it does not guarantee global correctness.
+>
+> Execution validity is determined only through  
+> deterministic resolution over the global DAG.
+
+---
+
+### Edge Semantics
+
+Edges encode meaning:
+
+- **DC → DC**: causal dependency  
+- **EC → DC**: execution interpretation  
+
+> ExecClaims are only valid relative to the DataClaims they reference.
+
+**Constraints:**
+- No explicit EC → EC edges  
+- Execution dependencies are implicit via DC structure  
+
+---
+
+### Conflict Model
+
+Multiple ExecClaims may interpret the same DataClaims differently.
+
+This is expected.
+
+Conflicts are **not resolved by consensus**.
+
+They are resolved deterministically using:
+
+- object version rules  
+- hash-based tie-breaking  
+- dependency propagation  
+
+---
+
+### Finality Model
+
+Two levels of finality:
+
+- **Optimistic finality** (QC-based)  
+- **Global finality** (anchoring over DAG)  
+
+Finality emerges from **deterministic resolution**, not ordering.
+
+---
+
+### System Properties
+
+- Horizontal scalability (object-level parallelism)  
+- Fault isolation across shards  
+- Partial liveness under failure  
+- Deterministic convergence  
+
+---
+
+### Immutability Guarantee
+
+Once published:
+
+- DC and EC are immutable  
+- execution is append-only  
+- vertex hashes never change  
+
+This guarantees:
+
+- verifiability  
+- data availability  
+- non-equivocation  
+
+---
+
+### Tradeoffs
+
+- Rollback is inherent (optimistic execution)  
+- State growth must be controlled (fees / pruning)  
+
+---
+## 3. Implementation Waypoints
 
 This project cannot be implemented in a single step. Instead, it must evolve incrementally under the principle of introducing only one new source of complexity at a time. The ultimate goal is a system combining a data DAG with a sharded Jolteon-based consensus layer, but the initial focus must be on building a deterministic state machine without consensus or sharding.
 
@@ -67,6 +246,6 @@ All commits prior to April 22, 2026 should be considered unpublished work with n
 The project is licensed under GPL v3 starting from April 22, 2026.
 
 - **Code**: Licensed under GNU General Public License v3.0 or later.
-- **Documentation (Design Overview and Implementation Waypoints)**: Licensed under CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)
+- **Documentation**: All content within this repository including README.md is licensed under CC BY-NC-ND 4.0. (https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
 Copyright (c) 2026 elias-log.
