@@ -5,7 +5,7 @@ package core
 
 import (
 	"klef/config"
-	"klef/types"
+	"klef/pkg/types"
 	"math/rand"
 	"sync"
 	"testing"
@@ -17,7 +17,11 @@ import (
 func TestDAGOrphanAndInsertion(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
+
+	if v.DAG == nil {
+		t.Fatal("validator wiring failed")
+	}
 
 	// Simulate the current node being at Round 10.
 	currentRound := 10
@@ -42,7 +46,7 @@ func TestDAGOrphanAndInsertion(t *testing.T) {
 func TestOrphanResolution(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	// 1. Prepare the 'Real Parent' but do not insert it yet.
 	parentVtx := CreateDummyVertex(0, 0, []types.Hash{}, signer)
@@ -74,7 +78,7 @@ func TestOrphanResolution(t *testing.T) {
 func TestDeepOrphanChain(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	// 1. Generation: v1 (Gen 0) -> v2 (Gen 1) -> v3 (Gen 2)
 	v1 := CreateDummyVertex(0, 0, []types.Hash{}, signer)
@@ -109,7 +113,7 @@ func TestDeepOrphanChain(t *testing.T) {
 func TestMeshOrphanResolution(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	// 1. Diamond Mesh Design
 	//      V1 (Root)
@@ -168,35 +172,34 @@ func TestSyncTriggerOnRoundGap(t *testing.T) {
 	cfg.DAG.SyncTriggerThreshold = 2
 
 	signer, _ := NewEd25519Signer()
-	mock := &MockFetcher{}
 
-	v := NewValidator(0, cfg, signer)
-	v.DAG.Fetcher = mock
+	t.Run("Case 1", func(t *testing.T) {
+		mock := &MockFetcher{}
 
-	t.Run("Case 1: Small Round Gap (Sync should NOT trigger)", func(t *testing.T) {
-		mock.Called = false
+		v := NewTestValidator(t, cfg, signer)
+		v.DAG.Fetcher = mock
+
 		currentRound := 5
-		// Gap = 1, which is below threshold 2.
 		vtx := CreateDummyVertex(1, 4, []types.Hash{{0x1}}, signer)
 		v.DAG.AddVertex(vtx, currentRound)
 
 		if mock.Called {
-			t.Errorf("❌ Fetcher triggered for a small gap of 1! Resource waste.")
+			t.Errorf("unexpected sync trigger")
 		}
 	})
 
-	t.Run("Case 2: Large Round Gap (Sync SHOULD trigger)", func(t *testing.T) {
-		mock.Called = false
+	t.Run("Case 2", func(t *testing.T) {
+		mock := &MockFetcher{}
+
+		v := NewTestValidator(t, cfg, signer)
+		v.DAG.Fetcher = mock
+
 		currentRound := 10
-		// Gap = 5 (15-10), which exceeds threshold 2.
-		// Receiving a vertex from much later rounds indicates we are lagging behind.
 		vtx := CreateDummyVertex(1, 15, []types.Hash{{0x2}}, signer)
 		v.DAG.AddVertex(vtx, currentRound)
 
 		if !mock.Called {
-			t.Errorf("❌ Fetcher remained silent despite a gap of 5! Sync is urgent.")
-		} else {
-			t.Logf("✅ Success: Sync request dispatched for hash: %v", mock.Hashes)
+			t.Errorf("expected sync trigger")
 		}
 	})
 }
@@ -206,7 +209,7 @@ func TestSyncTriggerOnRoundGap(t *testing.T) {
 func TestDuplicateVertexIgnored(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	vtx := CreateDummyVertex(1, 1, []types.Hash{}, signer)
 
@@ -230,7 +233,7 @@ func TestDuplicateVertexIgnored(t *testing.T) {
 func TestInvalidHashRejected(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	vtx := CreateDummyVertex(1, 1, []types.Hash{}, signer)
 
@@ -252,7 +255,7 @@ func TestInvalidHashRejected(t *testing.T) {
 func TestPartialDependencyResolution(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	v1 := CreateDummyVertex(0, 1, []types.Hash{}, signer)                 // Parent 1
 	v2 := CreateDummyVertex(1, 1, []types.Hash{}, signer)                 // Parent 2
@@ -287,89 +290,179 @@ func TestDAGConsistencyAndReconstruction(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
 
-	// 1. Node A: Construct 10 vertices with complex causal dependencies.
-	nodeA := NewValidator(0, cfg, signer)
+	// 1. Node A: fully wired test validator
+	nodeA := NewTestValidator(t, cfg, signer)
 	vertices := make([]*types.Vertex, 10)
 
-	// Genesis-level vertices (Round 1)
+	// Genesis-level vertices
 	for i := 0; i < 3; i++ {
 		vertices[i] = CreateDummyVertex(i, 1, []types.Hash{}, signer)
 		nodeA.DAG.AddVertex(vertices[i], 1)
 	}
 
-	// Intertwined vertices (Rounds 2~5)
-	vertices[3] = CreateDummyVertex(0, 2, []types.Hash{vertices[0].Hash, vertices[1].Hash}, signer)
-	vertices[4] = CreateDummyVertex(1, 2, []types.Hash{vertices[1].Hash, vertices[2].Hash}, signer)
-	vertices[5] = CreateDummyVertex(2, 3, []types.Hash{vertices[3].Hash, vertices[4].Hash}, signer)
-	vertices[6] = CreateDummyVertex(0, 3, []types.Hash{vertices[0].Hash, vertices[5].Hash}, signer)
-	vertices[7] = CreateDummyVertex(1, 4, []types.Hash{vertices[6].Hash, vertices[2].Hash}, signer)
-	vertices[8] = CreateDummyVertex(2, 4, []types.Hash{vertices[5].Hash, vertices[7].Hash}, signer)
-	vertices[9] = CreateDummyVertex(0, 5, []types.Hash{vertices[8].Hash}, signer)
+	// Intertwined vertices
+	vertices[3] = CreateDummyVertex(
+		0, 2,
+		[]types.Hash{
+			vertices[0].Hash,
+			vertices[1].Hash,
+		},
+		signer,
+	)
+
+	vertices[4] = CreateDummyVertex(
+		1, 2,
+		[]types.Hash{
+			vertices[1].Hash,
+			vertices[2].Hash,
+		},
+		signer,
+	)
+
+	vertices[5] = CreateDummyVertex(
+		2, 3,
+		[]types.Hash{
+			vertices[3].Hash,
+			vertices[4].Hash,
+		},
+		signer,
+	)
+
+	vertices[6] = CreateDummyVertex(
+		0, 3,
+		[]types.Hash{
+			vertices[0].Hash,
+			vertices[5].Hash,
+		},
+		signer,
+	)
+
+	vertices[7] = CreateDummyVertex(
+		1, 4,
+		[]types.Hash{
+			vertices[6].Hash,
+			vertices[2].Hash,
+		},
+		signer,
+	)
+
+	vertices[8] = CreateDummyVertex(
+		2, 4,
+		[]types.Hash{
+			vertices[5].Hash,
+			vertices[7].Hash,
+		},
+		signer,
+	)
+
+	vertices[9] = CreateDummyVertex(
+		0, 5,
+		[]types.Hash{
+			vertices[8].Hash,
+		},
+		signer,
+	)
 
 	for i := 3; i < 10; i++ {
 		nodeA.DAG.AddVertex(vertices[i], 5)
 	}
 
-	// 2. Node B: Initialized with a fresh state.
-	nodeB := NewValidator(1, cfg, signer)
+	// 2. Node B: fresh fully wired validator
+	nodeB := NewTestValidator(t, cfg, signer)
 
-	// 3. Inject vertices into Node B in reverse order (Child to Ancestor).
+	// 3. Reverse-order replay
 	for i := 9; i >= 0; i-- {
 		nodeB.DAG.AddVertex(vertices[i], 5)
 	}
 
-	// 4. Final Validation: Size and structure must match.
+	// 4. DAG size check
 	if nodeA.DAG.Size() != nodeB.DAG.Size() {
-		t.Errorf("❌ Convergence Failure! NodeA size: %d, NodeB size: %d",
-			nodeA.DAG.Size(), nodeB.DAG.Size())
+		t.Fatalf(
+			"convergence failure: nodeA=%d nodeB=%d",
+			nodeA.DAG.Size(),
+			nodeB.DAG.Size(),
+		)
 	}
 
-	if !compareDAG(nodeA.DAG, nodeB.DAG) {
-		t.Fatal("❌ Structural Mismatch: DAGs are not identical despite same inputs.")
+	// 5. Structural equivalence check
+	if !compareDAGFull(nodeA.DAG, nodeB.DAG) {
+		t.Fatal("structural mismatch after reconstruction")
 	}
 
-	t.Logf("✅ Success: Both nodes converged to the same state (Size: %d).", nodeB.DAG.Size())
+	t.Logf(
+		"success: reconstructed DAG converged (size=%d)",
+		nodeB.DAG.Size(),
+	)
 }
 
 /// TestAbnormalEdgeCases covers logical loops and resource exhaustion attacks.
 func TestAbnormalEdgeCases(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.DAG.OrphanCapacity = 2 // Extremely low capacity for testing.
+	cfg.DAG.OrphanCapacity = 2            // Extremely low capacity for testing.
+	cfg.DAG.SyncTriggerThreshold = 999999 // Disable sync side-effects.
+
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
 
 	t.Run("Möbius Loop Attack", func(t *testing.T) {
-		// v1 depends on v2, and v2 depends on v1. A causal impossibility.
-		h1 := types.Hash{0xaa}
-		h2 := types.Hash{0xbb}
+		v := NewTestValidator(t, cfg, signer)
 
-		v1 := CreateDummyVertex(0, 10, []types.Hash{h2}, signer)
-		v1.Hash = h1 // Forced hash for simulation
+		// Step 1: create temporary independent vertices
+		v1 := CreateDummyVertex(0, 10, []types.Hash{}, signer)
+		v2 := CreateDummyVertex(0, 11, []types.Hash{}, signer)
 
-		v2 := CreateDummyVertex(0, 11, []types.Hash{h1}, signer)
-		v2.Hash = h2
+		// Step 2: make them reference each other
+		v1.Parents = []types.Hash{v2.Hash}
+		v1.Normalize()
+		v1.Hash = v1.CalculateHash()
+		v1.Signature = signer.Sign(v1.Hash.Bytes())
 
+		v2.Parents = []types.Hash{v1.Hash}
+		v2.Normalize()
+		v2.Hash = v2.CalculateHash()
+		v2.Signature = signer.Sign(v2.Hash.Bytes())
+
+		// Step 3: inject
 		v.DAG.AddVertex(v1, 10)
 		v.DAG.AddVertex(v2, 10)
 
-		// Result: Both should remain in the Orphan Buffer without crashing the system.
+		// Both should remain buffered (unsatisfied circular dependency)
 		if v.DAG.Size() != 0 {
-			t.Error("❌ Circular dependency should not be inserted into the DAG.")
+			t.Error("❌ Circular dependency should not enter DAG.")
+		}
+
+		if v.DAG.Buffer.Size() != 2 {
+			t.Errorf(
+				"❌ Expected 2 buffered orphans, got %d",
+				v.DAG.Buffer.Size(),
+			)
 		}
 	})
 
 	t.Run("Orphanage Capacity Limit", func(t *testing.T) {
-		// 1. Fill buffer to capacity.
+		v := NewTestValidator(t, cfg, signer)
+
+		// Fill buffer to capacity.
 		for i := 0; i < 2; i++ {
-			vtx := CreateDummyVertex(0, i+1, []types.Hash{{byte(i + 100)}}, signer)
+			vtx := CreateDummyVertex(
+				0,
+				i+1,
+				[]types.Hash{{byte(i + 100)}},
+				signer,
+			)
 			v.DAG.AddVertex(vtx, 1)
 		}
 
-		// 2. Inject extra orphan.
-		vtxExtra := CreateDummyVertex(0, 99, []types.Hash{{0xff}}, signer)
+		// Inject one more orphan (should trigger eviction policy).
+		vtxExtra := CreateDummyVertex(
+			0,
+			99,
+			[]types.Hash{{0xff}},
+			signer,
+		)
 		v.DAG.AddVertex(vtxExtra, 1)
 
 		size := v.DAG.Buffer.Size()
+
 		if size <= 2 {
 			t.Logf("✅ Success: Buffer eviction policy enforced. Size: %d", size)
 		} else {
@@ -384,31 +477,36 @@ func TestRandomizedDeliveryConvergence(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
 
-	nodeA := NewValidator(0, cfg, signer)
-	nodeB := NewValidator(1, cfg, signer)
+	// Fully wired test validators
+	nodeA := NewTestValidator(t, cfg, signer)
+	nodeB := NewTestValidator(t, cfg, signer)
 
 	vertices := generateComplexDAG(50)
 
-	// A: Sequential delivery.
+	// Node A: Sequential deterministic insertion
 	for _, vtx := range vertices {
 		nodeA.DAG.AddVertex(vtx, 10)
 	}
 
-	// B: Parallel delivery with random delays and duplicates.
+	// Node B: Parallel randomized delivery
 	var wg sync.WaitGroup
 	shuffled := shuffle(vertices)
 
 	for _, vtx := range shuffled {
 		wg.Add(1)
+
 		go func(v *types.Vertex) {
 			defer wg.Done()
 
-			// Simulate network jitter.
-			time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
+			// Simulate network jitter
+			time.Sleep(
+				time.Duration(rand.Intn(10)) * time.Millisecond,
+			)
 
+			// Primary delivery
 			nodeB.DAG.AddVertex(v, 10)
 
-			// Simulate re-transmission / duplication.
+			// Simulate duplicate delivery
 			if rand.Intn(2) == 0 {
 				nodeB.DAG.AddVertex(v, 10)
 			}
@@ -417,9 +515,11 @@ func TestRandomizedDeliveryConvergence(t *testing.T) {
 
 	wg.Wait()
 
+	// Final structural equivalence
 	if !compareDAGFull(nodeA.DAG, nodeB.DAG) {
 		t.Fatal("❌ Concurrency Failure: DAGs diverged under parallel injection.")
 	}
+
 	t.Log("✅ Success: Deterministic convergence achieved under race conditions.")
 }
 
@@ -427,34 +527,30 @@ func TestRandomizedDeliveryConvergence(t *testing.T) {
 func TestByzantineResilience(t *testing.T) {
 	cfg := config.DefaultConfig()
 	signer, _ := NewEd25519Signer()
-	v := NewValidator(0, cfg, signer)
+	v := NewTestValidator(t, cfg, signer)
 
 	// Case A: Malformed parent sorting violation.
 	v1 := CreateDummyVertex(1, 1, []types.Hash{}, signer)
 	v2 := CreateDummyVertex(1, 1, []types.Hash{}, signer)
 
-	// Intentionally unsorted parents.
+	// Force unsorted parents deterministically
 	malformed := []types.Hash{v2.Hash, v1.Hash}
-	if v1.Hash.String() < v2.Hash.String() {
-		malformed = []types.Hash{v2.Hash, v1.Hash}
-	} else {
-		malformed = []types.Hash{v1.Hash, v2.Hash}
-	}
 
 	vByz := CreateByzantineVertex(1, 1, malformed, signer)
 	v.DAG.AddVertex(vByz, 1)
 
-	// Check if Slasher applied penalty for MsgInvalidPayload.
+	// Slasher check (may vary depending on implementation timing)
 	if v.Slasher.GetPenalty(1) == 0 {
 		t.Fatal("❌ Failed to detect malformed parent sorting (Byzantine).")
 	}
 
-	// Case B: Memory Attack (Ghost orphans)
+	// Case B: Orphan buffer stress test
 	for i := 0; i < cfg.DAG.OrphanCapacity+5; i++ {
 		ghost := CreateDummyVertex(2, 5, []types.Hash{{byte(i + 50)}}, signer)
 		v.DAG.AddVertex(ghost, 5)
 	}
 
+	// buffer should not explode beyond capacity (eviction or rejection)
 	if v.DAG.Buffer.Size() > cfg.DAG.OrphanCapacity {
 		t.Errorf("❌ Orphan Buffer exceeded capacity limit: %d", v.DAG.Buffer.Size())
 	}

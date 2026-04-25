@@ -21,7 +21,7 @@ package core
 import (
 	"fmt"
 	"klef/config"
-	"klef/types"
+	"klef/pkg/types"
 	"sync"
 	"time"
 )

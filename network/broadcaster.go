@@ -5,7 +5,7 @@ package network
 
 import (
 	"fmt"
-	"klef/types"
+	"klef/pkg/types"
 )
 
 /// Broadcaster defines the interface for message propagation across the network.

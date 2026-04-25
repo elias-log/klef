@@ -3,7 +3,7 @@
 
 package validation
 
-import "klef/types"
+import "klef/pkg/types"
 
 /// MessageValidator defines the universal interface for all protocol message validation logic.
 type MessageValidator interface {

@@ -28,7 +28,7 @@ Notes:
 
 package consensus
 
-import "klef/types"
+import "klef/pkg/types"
 
 /// Verifier encapsulates the cryptographic material and logic required for validation.
 type Verifier struct {

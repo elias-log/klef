@@ -37,14 +37,30 @@ package core
 import (
 	"context"
 	"fmt"
-	"klef/types"
+	"klef/config"
+	"klef/pkg/types"
 	"time"
 )
 
 /// VertexFetcher coordinates the 'Fetch' protocol to resolve DAG gaps.
 type VertexFetcher struct {
 	InboundResponse chan *types.Vertex // Ingress for requested vertex data
-	Validator       *Validator         // Reference to parent for communication & config
+	Context         FetchContext
+}
+
+type FetchContext interface {
+	RuntimeContext() context.Context
+	Broadcast(msgType types.MessageType, payload interface{})
+	SendTo(targetID int, msgType types.MessageType, payload interface{})
+	GetRandomPeers(n int) []int
+
+	IsRequestPending(hash types.Hash) bool
+	AddPendingRequest(hash types.Hash) bool
+	RemovePendingRequest(hash types.Hash)
+	WatchRequests(hashes []types.Hash) <-chan struct{}
+
+	GetMissingHashes(hashes []types.Hash) []types.Hash
+	ReplicaConfig() *config.Config
 }
 
 /// StartSync initiates an asynchronous retrieval process for a set of missing hashes.
@@ -59,12 +75,12 @@ func (f *VertexFetcher) StartSync(missingHashes []types.Hash, suspectID int) {
 	// 2. Spawn a dedicated worker goroutine for this batch.
 	go func() {
 		currentMissing := filtered
-		ctx, cancel := context.WithCancel(f.Validator.ctx)
+		ctx, cancel := context.WithCancel(f.Context.RuntimeContext())
 		defer cancel()
 
 		for step := 1; step <= 3; step++ {
 			// Pre-dispatch check: Has the data arrived via other channels?
-			currentMissing = f.Validator.DAG.GetMissingHashes(currentMissing)
+			currentMissing = f.Context.GetMissingHashes(currentMissing)
 			if len(currentMissing) == 0 {
 				return
 			}
@@ -75,7 +91,7 @@ func (f *VertexFetcher) StartSync(missingHashes []types.Hash, suspectID int) {
 			case <-time.After(f.getStepTimeout(step)):
 				continue
 			case <-f.notifyOnArrival(currentMissing):
-				currentMissing = f.Validator.DAG.GetMissingHashes(currentMissing)
+				currentMissing = f.Context.GetMissingHashes(currentMissing)
 				if len(currentMissing) == 0 {
 					return
 				}
@@ -85,7 +101,7 @@ func (f *VertexFetcher) StartSync(missingHashes []types.Hash, suspectID int) {
 		}
 		// Final verification and Failure Reporting (Data Availability Failure).
 		// TODO: Unified policy for data availability (DA) failures (e.g., slashing or cold storage).
-		if finalMissing := f.Validator.DAG.GetMissingHashes(currentMissing); len(finalMissing) > 0 {
+		if finalMissing := f.Context.GetMissingHashes(currentMissing); len(finalMissing) > 0 {
 			f.handleDAFailure(finalMissing)
 		}
 
@@ -98,10 +114,10 @@ func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []types.H
 	case 1:
 		f.dispatchFetch([]int{suspectID}, hashes)
 	case 2:
-		neighbors := f.getFilteredNeighbors(f.Validator.Config.Sync.MaxRandomPeers, suspectID)
+		neighbors := f.getFilteredNeighbors(f.Context.ReplicaConfig().Sync.MaxRandomPeers, suspectID)
 		f.dispatchFetch(neighbors, hashes)
 	case 3:
-		f.Validator.Broadcast(types.MsgFetchReq, &types.FetchRequest{
+		f.Context.Broadcast(types.MsgFetchReq, &types.FetchRequest{
 			MissingHashes: hashes,
 		})
 	}
@@ -109,7 +125,7 @@ func (f *VertexFetcher) dispatchByStep(step int, suspectID int, hashes []types.H
 
 /// getFilteredNeighbors selects random peers excluding the suspect.
 func (f *VertexFetcher) getFilteredNeighbors(count int, suspectID int) []int {
-	peers := f.Validator.GetRandomPeers(count)
+	peers := f.Context.GetRandomPeers(count)
 	filtered := make([]int, 0, len(peers))
 	for _, pid := range peers {
 		if pid != suspectID {
@@ -129,19 +145,20 @@ func (f *VertexFetcher) dispatchFetch(peerIDs []int, hashes []types.Hash) {
 		MissingHashes: hashes,
 	}
 	for _, pid := range peerIDs {
-		f.Validator.SendTo(pid, types.MsgFetchReq, payload)
+		f.Context.SendTo(pid, types.MsgFetchReq, payload)
 	}
 }
 
 /// getStepTimeout retrieves timing parameters for each escalation tier.
 func (f *VertexFetcher) getStepTimeout(step int) time.Duration {
+	cfg := f.Context.ReplicaConfig()
 	switch step {
 	case 1:
-		return f.Validator.Config.Sync.Step1Timeout
+		return cfg.Sync.Step1Timeout
 	case 2:
-		return f.Validator.Config.Sync.Step2Timeout
+		return cfg.Sync.Step2Timeout
 	case 3:
-		return f.Validator.Config.Sync.Step3Timeout
+		return cfg.Sync.Step3Timeout
 	default:
 		return 5 * time.Second
 	}
@@ -153,7 +170,7 @@ func (f *VertexFetcher) filterNewRequests(hashes []types.Hash) []types.Hash {
 	filtered := make([]types.Hash, 0)
 	for _, h := range hashes {
 		// Atomic Check-and-Set: only append if Add() succeeds (i.e., not already pending).
-		if f.Validator.pendingMgr.Add(h) {
+		if f.Context.AddPendingRequest(h) {
 			filtered = append(filtered, h)
 		}
 	}
@@ -164,7 +181,7 @@ func (f *VertexFetcher) filterNewRequests(hashes []types.Hash) []types.Hash {
 /// specified hashes are received. This enables event-driven convergence
 /// and eliminates unnecessary polling latency.
 func (f *VertexFetcher) notifyOnArrival(hashes []types.Hash) <-chan struct{} {
-	return f.Validator.pendingMgr.Watch(hashes)
+	return f.Context.WatchRequests(hashes)
 }
 
 /// handleDAFailure manages scenarios where data remains unavailable after full escalation.
@@ -172,7 +189,7 @@ func (f *VertexFetcher) notifyOnArrival(hashes []types.Hash) <-chan struct{} {
 func (f *VertexFetcher) handleDAFailure(hashes []types.Hash) {
 	// 1. Release pending state to allow future retry attempts if necessary.
 	for _, h := range hashes {
-		f.Validator.pendingMgr.Remove(h)
+		f.Context.RemovePendingRequest(h)
 	}
 
 	// 2. Critical Observation: This state suggests a Data Withholding Attack

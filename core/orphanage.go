@@ -44,7 +44,7 @@ Limitations & Local Determinism:
 package core
 
 import (
-	"klef/types"
+	"klef/pkg/types"
 	"sync"
 )
 

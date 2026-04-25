@@ -26,7 +26,7 @@ Notes:
 package consensus
 
 import (
-	"klef/types"
+	"klef/pkg/types"
 	"math"
 	"sync"
 )
@@ -36,8 +36,8 @@ type QuorumPolicy interface {
 	/// IsQuorum verifies if the collected signatures satisfy the required threshold.
 	IsQuorum(qc *types.QC) bool
 
-	/// GetQuorumSize calculates the minimum number of participants needed for a valid QC.
-	GetQuorumSize(qcType types.QCType) int
+	/// QuorumSize calculates the minimum number of participants needed for a valid QC.
+	QuorumSize(qcType types.QCType) int
 }
 
 /// DynamicQuorumPolicy handles threshold logic with support for membership reconfigurations.
@@ -73,11 +73,11 @@ func NewDynamicQuorumPolicy(totalN int, committeeN int, gRatio, cRatio float64) 
 	}
 }
 
-/// GetQuorumSize computes the numerical threshold for a given QC type.
+/// QuorumSize computes the numerical threshold for a given QC type.
 // Calculation Logic:
 // - Non-transition: Standard BFT-style threshold (e.g., 2f+1).
 // - Transition: Max(calc(oldN), calc(newN)) to maintain safety across views.
-func (p *DynamicQuorumPolicy) GetQuorumSize(qcType types.QCType) int {
+func (p *DynamicQuorumPolicy) QuorumSize(qcType types.QCType) int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -116,7 +116,7 @@ func (p *DynamicQuorumPolicy) GetQuorumSize(qcType types.QCType) int {
 // It only evaluates quorum size to keep this layer lightweight.
 func (p *DynamicQuorumPolicy) IsQuorum(qc *types.QC) bool {
 	// 1. Fetch the required quorum size based on current policy state.
-	required := p.GetQuorumSize(qc.Type)
+	required := p.QuorumSize(qc.Type)
 
 	// 2. Evaluate if the signature set meets or exceeds the requirement.
 	// Assumption: qc.Signatures contains unique validator signatures.

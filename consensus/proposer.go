@@ -36,7 +36,7 @@ package consensus
 
 import (
 	"klef/network"
-	"klef/types"
+	"klef/pkg/types"
 	"sync"
 	"time"
 )
@@ -65,11 +65,11 @@ func NewProposer(ctx types.ConsensusContext, qp QuorumPolicy, broadcaster networ
 // 3. Evidence Assembly: Aggregates signatures into a QC and extracts parent hashes.
 // 4. Vertex Construction: Packages transactions, causal links, and evidence into a signed unit.
 // 5. Broadcast: Disseminates the vertex to peers to trigger the next voting cycle.
-func (p *Proposer) Propose() {
+func (p *Proposer) Propose(qcType types.QCType) {
 
 	// 1. Collect Votes (Invariant: Validity)
 	// Retrieve 2f+1 votes and the round they represent from the context's vote pool.
-	quorumVotes, votedRound := p.ctx.GetReadyQuorum()
+	quorumVotes, votedRound := p.ctx.CheckQuorum(qcType)
 	if quorumVotes == nil {
 		return
 	}
@@ -82,12 +82,12 @@ func (p *Proposer) Propose() {
 	}
 
 	// 3. Assemble Quorum Certificate and Parent Links
-	qc := p.assembleQC(quorumVotes, votedRound)
+	qc := p.assembleQC(quorumVotes, votedRound, qcType)
 	parentHashes := p.extractHashesFromVotes(quorumVotes)
 
 	// 4. Vertex Creation
 	vtx := &types.Vertex{
-		Author:    p.ctx.GetID(),
+		Author:    p.ctx.ID(),
 		Round:     nextRound,
 		Parents:   parentHashes,
 		ParentQCs: []*types.QC{qc},
@@ -141,7 +141,11 @@ func (p *Proposer) fetchTransactions() [][]byte {
 3. Bitmask Optimization: Use bitmasks for validator participation tracking
    to minimize header overhead.
 */
-func (p *Proposer) assembleQC(votes []*types.Message, round int) *types.QC {
+func (p *Proposer) assembleQC(
+	votes []*types.Message,
+	round int,
+	qcType types.QCType,
+) *types.QC {
 	signatures := make(map[int]types.Signature)
 	var representativeHash types.Hash
 
@@ -158,10 +162,10 @@ func (p *Proposer) assembleQC(votes []*types.Message, round int) *types.QC {
 	}
 
 	return &types.QC{
-		Type:       types.QCGlobal,
+		Type:       qcType,
 		VertexHash: representativeHash,
 		Round:      round,
-		ProposerID: p.ctx.GetID(),
+		ProposerID: p.ctx.ID(),
 		Signatures: signatures,
 	}
 }

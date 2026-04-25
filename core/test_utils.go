@@ -5,11 +5,36 @@ package core
 
 import (
 	"fmt"
-	"klef/types"
+	"klef/config"
+	"klef/pkg/types"
 	"math/rand"
 	"reflect"
+	"testing"
 	"time"
 )
+
+func NewTestValidator(t *testing.T, cfg *config.Config, signer *Ed25519Signer) *Validator {
+	t.Helper()
+
+	v := NewValidator(0, cfg, signer)
+
+	slasher := NewSlasher(cfg)
+
+	fetcher := &VertexFetcher{
+		InboundResponse: make(chan *types.Vertex, cfg.Resource.FetcherChannelSize),
+	}
+
+	dag := NewDAG(fetcher, slasher, cfg)
+
+	v.Slasher = slasher
+	v.DAG = dag
+
+	if v.DAG == nil {
+		t.Fatal("DAG is nil")
+	}
+
+	return v
+}
 
 /// CreateDummyVertex generates a standard, valid test vertex with specified metadata and parents.
 func CreateDummyVertex(author int, round int, parents []types.Hash, signer *Ed25519Signer) *types.Vertex {
@@ -62,13 +87,18 @@ func CreateByzantineVertex(author int, round int, parents []types.Hash, signer *
 }
 
 /// InjectFetchResponse manually pushes a simulated FetchResponse message into a validator's ingress.
-func InjectFetchResponse(v *Validator, vertices []*types.Vertex) {
+func InjectFetchResponse(r interface {
+	RouteMessage(*types.Message)
+}, vertices []*types.Vertex) {
 	msg := &types.Message{
-		FromID:   999,
-		Type:     types.MsgFetchRes,
-		FetchRes: &types.FetchResponse{Vertices: vertices},
+		FromID: 999,
+		Type:   types.MsgFetchRes,
+		FetchRes: &types.FetchResponse{
+			Vertices: vertices,
+		},
 	}
-	v.InboundMsg <- msg
+
+	r.RouteMessage(msg)
 }
 
 /// generateComplexDAG constructs a multi-layered set of vertices with randomized causal links.

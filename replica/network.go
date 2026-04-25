@@ -2,7 +2,7 @@
 // Copyright (c) 2026 elias-log
 
 /*
-Validator network accessors provide high-level messaging primitives.
+Replica network accessors provide high-level messaging primitives.
 
 Key properties:
 - Message Dissemination: Supports Broadcast, Multicast, and Unicast patterns.
@@ -16,41 +16,46 @@ Note:
   Future implementations must ensure network calls do not block consensus-critical paths.
 */
 
-package core
+package replica
 
 import (
-	"klef/types"
 	"fmt"
+	"klef/pkg/types"
 )
 
 /// Broadcast disseminates a message to all registered peers in the network.
-func (v *Validator) Broadcast(msgType types.MessageType, payload interface{}) {
-	v.peersMu.RLock()
-	peers := make([]int, 0, len(v.Peers))
-	for id := range v.Peers {
+func (r *Replica) Broadcast(msgType types.MessageType, payload interface{}) {
+	r.peersMu.RLock()
+	peers := make([]int, 0, len(r.peers))
+	for id := range r.peers {
 		peers = append(peers, id)
 	}
-	v.peersMu.RUnlock()
+	r.peersMu.RUnlock()
 
 	for _, peerID := range peers {
-		v.SendTo(peerID, msgType, payload)
+		r.SendTo(peerID, msgType, payload)
 	}
 }
 
 /// SendTo dispatches a message to a specific target peer.
 /// This method acts as the primary egress point for serialized P2P traffic.
 // TODO(Network): payload is intentionally abstract and will be serialized at the network layer.
-func (v *Validator) SendTo(targetID int, msgType types.MessageType, payload interface{}) {
+func (r *Replica) SendTo(targetID int, msgType types.MessageType, payload interface{}) {
 	// TODO(Network): Bridge this call with the actual P2P layer or PeerManager.
 	// Currently simulates the transmission of consensus data.
 	// TODO: Replace with structured logger (zap/logrus) in production
-	fmt.Printf("[RELAY] Validator %d -> Peer %d: [%v] Transmission initiated.\n", v.ID, targetID, msgType)
+	fmt.Printf(
+		"[RELAY] Replica %d -> Peer %d: [%v] Transmission initiated.\n",
+		r.id,
+		targetID,
+		msgType,
+	)
 }
 
 /// Multicast sends a message to a specific subset of peers, typically a committee.
-func (v *Validator) Multicast(committee []int, msgType types.MessageType, payload interface{}) {
+func (r *Replica) Multicast(committee []int, msgType types.MessageType, payload interface{}) {
 	// Assumes committee membership is pre-validated and trusted.
 	for _, peerID := range committee {
-		v.SendTo(peerID, msgType, payload)
+		r.SendTo(peerID, msgType, payload)
 	}
 }

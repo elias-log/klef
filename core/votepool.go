@@ -20,7 +20,7 @@ Note:
 package core
 
 import (
-	"klef/types"
+	"klef/pkg/types"
 	"sync"
 )
 

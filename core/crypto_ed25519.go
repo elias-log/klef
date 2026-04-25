@@ -20,9 +20,9 @@ Note:
 package core
 
 import (
-	"klef/types"
 	"crypto/ed25519"
 	"fmt"
+	"klef/pkg/types"
 )
 
 /// Ed25519Signer encapsulates private/public key pairs for cryptographic operations.

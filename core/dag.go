@@ -29,7 +29,7 @@ package core
 import (
 	"fmt"
 	"klef/config"
-	"klef/types"
+	"klef/pkg/types"
 	"sort"
 	"sync"
 )
@@ -97,14 +97,17 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 	// Phase 3: Causal Link Validation (Lock Acquisition).
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	// Double-check after lock acquisition to prevent race conditions.
 	if _, exists := d.Vertices[vtx.Hash]; exists {
+		d.mu.Unlock()
 		return
 	}
 
 	missing := d.getMissingHashesLocked(vtx.Parents)
+
+	syncMissing := missing
+	suspectID := vtx.Author
 
 	// Phase 4: Orphan Handling & Sync Trigger.
 	if len(missing) > 0 {
@@ -112,10 +115,14 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 		d.Buffer.AddOrphan(vtx, missing)
 
 		// Sync logic: Triggered if the vertex round is significantly ahead.
-		diff := vtx.Round - currentNodeRound
-		if diff > d.Config.DAG.SyncTriggerThreshold {
-			d.Fetcher.StartSync(missing, vtx.Author)
+		shouldSync := (vtx.Round - currentNodeRound) > d.Config.DAG.SyncTriggerThreshold
+
+		d.mu.Unlock()
+
+		if shouldSync {
+			d.Fetcher.StartSync(syncMissing, suspectID)
 		}
+
 		return
 	}
 
@@ -126,6 +133,7 @@ func (d *DAG) AddVertex(vtx *types.Vertex, currentNodeRound int) {
 
 	// Phase 5: Official Insertion & Recursive Cascade.
 	d.processInsertionLocked(vtx)
+	d.mu.Unlock()
 }
 
 // Deterministic Sort: Critical invariant.

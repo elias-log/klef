@@ -15,7 +15,7 @@ type NetworkHygiene interface {
 /// It allows components to query consensus progress and object availability
 /// without mutating the underlying state machine.
 type StateReader interface {
-	GetCurrentRound() int
+	CurrentRound() int
 	IsKnownVertex(hash Hash) bool
 	IsFinalized(hash Hash) bool
 }
@@ -25,18 +25,24 @@ type SyncState interface {
 	IsRequestPending(hash Hash) bool
 }
 
-/// ConsensusContext extends StateReader with write-access and signing capabilities.
-// - This interface provides the active consensus engine (e.g., Proposer, Validator)
-// with the tools necessary to participate in the consensus protocol,
-// manage proposal lifecycles, and produce cryptographic proofs.
-// - It represents the only authority through which consensus modules
-// are allowed to mutate protocol state or emit signed artifacts.
+// ConsensusContext provides the runtime coordination surface required by
+// consensus components.
+//
+// It exposes:
+// - local state visibility (rounds, known vertices, finalization)
+// - synchronization status (pending fetch lifecycle)
+// - proposal lifecycle control
+// - quorum aggregation
+// - signing authority
+//
+// This interface is typically implemented by the Replica orchestration layer,
+// not by stateless validation components.
 type ConsensusContext interface {
 	NetworkHygiene
 	StateReader
 	SyncState
-	GetID() int
-	GetReadyQuorum() ([]*Message, int)
+	ID() int
+	CheckQuorum(QCType) ([]*Message, int)
 	AlreadyProposed(round int) bool
 	MarkAsProposed(round int)
 	Sign(data []byte) Signature

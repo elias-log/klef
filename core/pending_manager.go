@@ -32,7 +32,7 @@ import (
 	"context"
 	"klef/config"
 	"klef/internal/ds"
-	"klef/types"
+	"klef/pkg/types"
 	"math/rand"
 	"sync"
 	"time"
@@ -77,6 +77,15 @@ func NewPendingManager(cfg *config.Config) *PendingManager {
 		cfg:             cfg,
 		rng:             rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+}
+
+func (pm *PendingManager) Start(ctx context.Context) error {
+	go pm.StartCleanupLoop(ctx)
+	return nil
+}
+
+func (pm *PendingManager) Stop() error {
+	return nil
 }
 
 /// Add registers a new fetch request or updates an existing one with incremented backoff.
@@ -239,6 +248,10 @@ func (pm *PendingManager) getCleanupInterval() time.Duration {
 		return maxCleanupInterval
 	}
 	return interval
+}
+
+func (pm *PendingManager) Name() string {
+	return "Pending Manager"
 }
 
 // Internal Priority Queue Interface implementations

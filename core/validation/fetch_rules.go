@@ -22,7 +22,7 @@ package validation
 import (
 	"errors"
 	"fmt"
-	"klef/types"
+	"klef/pkg/types"
 )
 
 /// FetchRequestValidator inspects incoming sync requests from peers.
@@ -113,7 +113,7 @@ func (f *FetchResponseValidator) Validate(msg *types.Message, ctx types.Consensu
 
 /// validateRoundRange ensures the vertex falls within valid past/future round boundaries.
 func (f *FetchResponseValidator) validateRoundRange(vtx *types.Vertex, ctx types.StateReader) error {
-	currRound := ctx.GetCurrentRound()
+	currRound := ctx.CurrentRound()
 
 	// TODO(Scalability): Transition from hardcoded drift limits to dynamic, context-aware policies.
 	// As Klef evolves with Sharding and Asynchronous Committees, round drift tolerances

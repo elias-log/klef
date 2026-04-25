@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"klef/config"
 	"klef/core"
+	"klef/replica"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,19 +16,31 @@ import (
 
 func main() {
 	cfg := config.LoadConfig()
-	signer, _ := core.NewEd25519Signer() // 에러 처리는 생략했네
 
-	v := core.NewValidator(cfg.NodeID, cfg, signer)
+	signer, err := core.NewEd25519Signer()
+	if err != nil {
+		panic(err)
+	}
+
+	r := replica.NewReplica(cfg, signer)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go v.Start(ctx)
-	fmt.Printf(">>> [RUN] Klef Node %d 가동 중...\n", cfg.NodeID)
+	if err := r.Start(ctx); err != nil {
+		panic(err)
+	}
+
+	fmt.Printf(">>> [RUN] Klef Replica %d...\n", cfg.NodeID)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	<-sigCh
-	fmt.Println(">>> [SHUTDOWN] 안전하게 종료하네.")
+
+	fmt.Println(">>> [SHUTDOWN]")
+
+	if err := r.Stop(); err != nil {
+		panic(err)
+	}
 }
